@@ -149,9 +149,9 @@ fi
 # large recieve offload (LRO over GRO) instead of generic receive offload
 # ideal for proxies, proxy based apps, IDS, IPS, firewall, server apps recieving vast amounts of packets.
 # implemented in Linux 2.6 kernel
+ethtool -K ethX lro off
+ethtool -K ethX gro off
 #ethtool -K ethX lro on
-#ethtool -K ethX lro off
-#ethtool -K ethX gro off
 #ethtool -K ethX gro on
 
 # qdisc queue not single packets data
