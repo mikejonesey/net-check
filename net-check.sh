@@ -67,9 +67,11 @@ echo
 # that it takes fewer connections for someone evil to make the rest of the
 # tcp streams to go slow.
 
-echo "/proc/sys/net/ipv4/tcp_mem"
+echo "Maxiumum RAM for TCP: " | printText inf
+echo "/proc/sys/net/ipv4/tcp_mem [p] [p] [p]" | printText pro
 TCP_MEM=($(cat /proc/sys/net/ipv4/tcp_mem))
-cat /proc/sys/net/ipv4/tcp_mem
+cat /proc/sys/net/ipv4/tcp_mem | printText val
+echo
 
 # This will enusre that immediatly subsequent connections use these values (set to 1 to enable)
 #echo "/proc/sys/net/ipv4/route/flush"
@@ -82,55 +84,56 @@ cat /proc/sys/net/ipv4/tcp_mem
 # rmem_default = default size of receive buffers used by sockets (bytes)
 # wmem_default = default size of send buffers used by sockets (bytes)
 
-echo "/proc/sys/net/core/rmem_default"
-cat /proc/sys/net/core/rmem_default
+echo "Default tcp recieve buffer size: " | printText inf
+echo "/proc/sys/net/core/rmem_default" | printText pro
+cat /proc/sys/net/core/rmem_default | printText val
+echo
 
-echo "/proc/sys/net/core/wmem_default"
-cat /proc/sys/net/core/wmem_default
+echo "Default tcp send buffer size: " | printText inf
+echo "/proc/sys/net/core/wmem_default" | printText pro
+cat /proc/sys/net/core/wmem_default | printText val
+echo
 
 # overwritten by:
 # min		4K,  lowered  to PAGE_SIZE bytes in low-memory systems (used under presure)
 # default ???
 # max (On Linux 2.4, the default is 87380*2 bytes, lowered to 87380 in low-memory systems).
-echo "/proc/sys/net/ipv4/tcp_rmem [b] [b] [b]"
-echo "[b]1 minimum receive buffer for each TCP connection, this buffer is always allocated to a TCP socket, even under high pressure on the system."
-echo "[b]2 default receive buffer allocated for each TCP socket. This value overrides the /proc/sys/net/core/rmem_default value used by other protocols."
-echo "[b]3 maximum receive buffer that can be allocated for a TCP socket"
+echo "[b]1 minimum receive buffer for each TCP connection, this buffer is always allocated to a TCP socket, even under high pressure on the system." | printText inf
+echo "[b]2 default receive buffer allocated for each TCP socket. This value overrides the /proc/sys/net/core/rmem_default value used by other protocols." | printText inf
+echo "[b]3 maximum receive buffer that can be allocated for a TCP socket" | printText inf
 TCP_RMEM=($(cat /proc/sys/net/ipv4/tcp_rmem))
-cat /proc/sys/net/ipv4/tcp_rmem
+echo "/proc/sys/net/ipv4/tcp_rmem [b] [b] [b]" | printText pro
+cat /proc/sys/net/ipv4/tcp_rmem | printText val
+echo
 
-CALC_MAX_TCP_NO_PRESSURE_BYTES=$(echo "${TCP_MEM[1]}*$PAGE_SIZE" | bc)
-
-echo "assuming all tcp connections are recieve (typical for highter allocation)"
-
-CALC_MAX_TCP_CON_NO_PRESSURE=$(echo "scale=0; $CALC_MAX_TCP_NO_PRESSURE_BYTES/${TCP_RMEM[1]}" | bc)
-
-echo "Max connections with optimum throughput: $CALC_MAX_TCP_CON_NO_PRESSURE"
-
-echo "now for a speed test..."
-
-SPEED_GUESS=$(echo "scale=2; ((${TCP_RMEM[1]}-(${TCP_RMEM[1]}/2^$tcp_adv_win_scale))/0.150)/1000000" | bc)
-SPEED_GUESS_mbps=$(echo "scale=2; $SPEED_GUESS*8" | bc)
-echo "$SPEED_GUESS Mbytes/s ($SPEED_GUESS_mbps Mbps)"
-
-ram_at_optimum_usage=$(echo "scale=2; $CALC_MAX_TCP_NO_PRESSURE_BYTES/1000000" | bc)
+calc_max_tcp_no_pressure_bytes=$(echo "${TCP_MEM[1]}*$PAGE_SIZE" | bc)
+calc_max_tcp_con_no_pressure=$(echo "scale=0; $calc_max_tcp_no_pressure_bytes/${TCP_RMEM[1]}" | bc)
+speed_guess=$(echo "scale=2; ((${TCP_RMEM[1]}-(${TCP_RMEM[1]}/2^$tcp_adv_win_scale))/0.150)/1000000" | bc)
+speed_guess_mbps=$(echo "scale=2; $speed_guess*8" | bc)
+slow_speed_guess=$(echo "scale=2; ((${TCP_RMEM[0]}-(${TCP_RMEM[0]}/2^$tcp_adv_win_scale))/0.150)/1000000" | bc)
+slow_speed_guess_mbps=$(echo "scale=2; $slow_speed_guess*8" | bc)
+ram_at_optimum_usage=$(echo "scale=2; $calc_max_tcp_no_pressure_bytes/1000000" | bc)
 max_networking_ram=$(echo "scale=2; (${TCP_MEM[2]}*$PAGE_SIZE)/1000000" | bc)
 
-echo "ram at optimum: $ram_at_optimum_usage MB"
-echo "max networking ram: $max_networking_ram"
-exit 1
+echo "Max connections $calc_max_tcp_con_no_pressure with optimum throughput of $speed_guess Mbytes/s ($speed_guess_mbps Mbps)"
+echo "Pressure connections will be $slow_speed_guess Mbytes/s ($slow_speed_guess_mbps Mbps)"
+echo "RAM used by networking at optimum: $ram_at_optimum_usage MB"
+echo "Max RAM used by networking: $max_networking_ram MB"
+echo
 
 # Every TCP socket has this much buffer space to use before the buffer is filled up
 #20 (ms) * 100 (Mbps) = 0.02 * 100 / 8 * 1024 = 256 KB
-echo "/proc/sys/net/ipv4/tcp_wmem [b] [b] [b]"
-echo "[b]1 minimum TCP send buffer space available for a single TCP socket"
-echo "[b]2 default buffer space allowed for a single TCP socket to use."
-echo "[b]3 the maximum TCP send buffer space."
-cat /proc/sys/net/ipv4/tcp_wmem
+echo "[b]1 minimum TCP send buffer space available for a single TCP socket" | printText inf
+echo "[b]2 default buffer space allowed for a single TCP socket to use." | printText inf
+echo "[b]3 the maximum TCP send buffer space." | printText inf
+echo "/proc/sys/net/ipv4/tcp_wmem [b] [b] [b]" | printText pro
+cat /proc/sys/net/ipv4/tcp_wmem | printText val
+echo
 
 # Maximum backlog size (default 1000 packets)
-echo "/proc/sys/net/core/netdev_max_backlog"
-cat /proc/sys/net/core/netdev_max_backlog
+echo "/proc/sys/net/core/netdev_max_backlog" | printText pro
+cat /proc/sys/net/core/netdev_max_backlog | printText val
+echo
 
 # Que disciplines have their own buffers ontop of OS buffer
 
@@ -183,20 +186,24 @@ cat /proc/sys/net/core/default_qdisc
 #	eBPF : Extended Berkeley Packet Filter
 
 # Default qdisc for dev
-ip link list dev wlan0 | head -1 | grep -o "qdisc [a-z_]*"
+echo "Queue Discipline for $NIC"
+ip link list dev $NIC | head -1 | grep -o "qdisc [a-z_]*"
+echo
 
 # Default que length for dev
-ip link list dev wlan0 | head -1 | grep -o "default qlen [0-9]*"
+echo "Queue Length for $NIC"
+ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*"
+echo
 
 #Changing them
 #voice, video, best effort and background
-###tc qdisc replace dev wlan0 root fq_codel
-#tc qdisc replace dev wlan0 root prio
+###tc qdisc replace dev $NIC root fq_codel
+#tc qdisc replace dev $NIC root prio
 
 # For the txqueuelen, this is mostly relevant for gigE, but should not hurt
 # anything else. Old kernels have shipped with a default txqueuelen of 100,
 # which is definately too low and hurts performance.
-ip link set dev eth0 txqueuelen 2000
+ip link set dev $NIC txqueuelen 3000
 
 # Queues are run by the kernel at each jiffy
 # Jiffies are set to:
@@ -218,37 +225,39 @@ ip link set dev eth0 txqueuelen 2000
 # jumbo frames
 #1500, 2304, 4000, 9000
 JUMBOSIZE=4000
-CURRENT_MTU=$(ip link list dev wlan0 | head -1 | grep -o "mtu [0-9]*" | awk '{print $2}')
+CURRENT_MTU=$(ip link list dev $NIC | head -1 | grep -o "mtu [0-9]*" | awk '{print $2}')
 echo "setting jumbo Max Transfer Unit size of $JUMBOSIZE"
-ip link set dev wlan0 mtu $JUMBOSIZE
-
-#test larger page
-# 20 bytes for the internet protocol header
-# 8 bytes for the ICMP header and timestamp
-echo "Testing new frame size..."
-ping -M do -c 4 -s $(($JUMBOSIZE-28)) 10.10.0.1 &>/dev/null
-if [ "$?" != "0" ]; then
-	echo "Frame size not good, setting to 1500 (normal)."
-	ip link set dev eth0 mtu 1500
+ip link set dev $NIC mtu $JUMBOSIZE 2>/dev/null
+if [ "$?" == "0" ]; then
+	#test larger page
+	# 20 bytes for the internet protocol header
+	# 8 bytes for the ICMP header and timestamp
+	echo "Testing new frame size..."
+	ping -M do -c 4 -s $(($JUMBOSIZE-28)) 10.10.0.1 &>/dev/null
+	if [ "$?" != "0" ]; then
+		echo "Frame size not good, setting to 1500 (normal)."
+		ip link set dev $NIC mtu 1500
+	else
+		echo "Test Passed, with frame size: $JUMBOSIZE"
+	fi
 else
-	echo "Test Passed, with frame size: $JUMBOSIZE"
+	echo "Skipping test, changing frame size failed."
 fi
-
 # large recieve offload (LRO over GRO) instead of generic receive offload
 # ideal for proxies, proxy based apps, IDS, IPS, firewall, server apps recieving vast amounts of packets.
 # implemented in Linux 2.6 kernel
-ethtool -K ethX gro off
+ethtool -K $NIC gro off
 read -p "Large recieve offload? (y/n) [y] "
 if [ "$REPLY" == "y" ]; then
-	ethtool -K ethX lro on
+	ethtool -K $NIC lro on
 else
-	ethtool -K ethX lro off
+	ethtool -K $NIC lro off
 fi
 
 # qdisc queue not single packets data
 
 # full duplex
-#ethtool -s eth3 speed 100 duplex full
+#ethtool -s $NIC speed 100 duplex full
 }
 
 function congestionControl(){
