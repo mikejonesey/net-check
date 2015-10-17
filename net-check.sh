@@ -10,10 +10,11 @@
 # info sources, references and thanks:
 # Stephen Hemminger, Bufferbloat, Linuxcon 2015
 # Alessandro Selli, Traffic Control, Linuxcon 2015
-# man pages: tcp, tcpdump
+# man pages: tcp, tcpdump, netstat
 # docs: systemtap
 # http://www.acc.umu.se/~maswan/linux-netperf.txt
 # http://www.bufferbloat.net/projects/codel/wiki
+# http://www.linuxfoundation.org/collaborate/workgroups/networking/netem
 #
 
 NICS=($(ls -1 /sys/class/net/))
@@ -72,6 +73,11 @@ function gigECheck(){
 	fi
 }
 
+##################################################
+# Net check...
+##################################################
+# check various networking stats to find issues...
+
 function netCheck(){
 	title "Checking Network..."
 	which tcpdump &>/dev/null
@@ -81,7 +87,27 @@ function netCheck(){
 		bInterface=$(ifconfig | sed 's/^$/~/' | tr "\n" "_" | sed 's/~/\n/g; s/_//g' | grep "RX" | sed 's/ .*RX bytes:/ /; s/ (.*//' | sort -k2 -n | tail -1 | awk '{print $1}')
 		# check for remote services causing issues / RST
 		tcpinfo=$(timeout 10 tcpdump -i$bInterface -n -v 'tcp[tcpflags] & (tcp-rst) != 0' 2>&1 | grep -v ^$)
-		
+		if [ -n "$(echo "$tcpinfo" | grep -v " packets ")" ]; then
+			echo "Check the status of app..."
+		fi
+		echo
+
+		# check for recv queue filling up...
+		netc1=$(netstat -anpA inet 2>/dev/null | sort -k2 -n | tail -1 | expand | egrep -v "(tcp|udp)[ ]*0")
+		if [ -n "$netc1" ]; then
+			echo "Recv queue filling up: "
+			echo "$netc1"
+			echo
+		fi
+
+		# check for send queue filling up...
+		netc1=$(netstat -anpA inet 2>/dev/null | sort -k3 -n | tail -1 | expand | egrep -v "(tcp|udp)[ ]*0")
+		if [ -n "$netc1" ]; then
+			echo "Send queue filling up: "
+			echo "$netc1"
+			echo
+		fi
+
 	fi
 
 	read -p "Press enter to continue..."
@@ -455,17 +481,86 @@ read -p "Press enter to continue..."
 }
 
 ##################################################
+# Simulation...
+##################################################
+
+function netSim(){
+	# Network buffers should be temporarily increased or the network will be extra slow...
+
+	# Slow down / Mess up outgoing traffic...
+	for NIC in ${NICS[@]}; do
+		if [ "$NIC" == "lo" ]; then
+			# packet loss may not be effective on local loopback
+			continue
+		else
+			# network can be dellayed in amounts defined by jiffies
+			# 10ms on 100Hz kern 2.6-
+			#echo "tc qdisc add dev $NIC root netem delay 200ms 10ms 25%"
+			tc qdisc add dev $NIC root netem delay 200ms 10ms 25%
+			# smallest = 0.0000000232%
+			# 0.1% = 1/1000...
+			# emulate packet burst losses:
+			#echo "tc qdisc change dev $NIC root netem loss 0.3% 25%"
+			tc qdisc change dev $NIC root netem loss 0.3% 25%
+			# packet duplication (can be burst, same a packet loss):
+			#echo "tc qdisc change dev $NIC root netem duplicate 1%"
+			tc qdisc change dev $NIC root netem duplicate 1%
+			# packet corruption: (required kern >= 2.6.16)
+			kernelCheck "2.6.16"
+			if [ "$?" == "0" ]; then
+				#echo "tc qdisc change dev $NIC root netem corrupt 0.1% "
+				tc qdisc change dev $NIC root netem corrupt 0.1% 
+			fi
+			# Re-ordering
+			#tc qdisc change dev $NIC root netem gap 5 delay 10ms
+			#echo "tc qdisc change dev $NIC root netem delay 10ms reorder 25% 50%"
+			tc qdisc change dev $NIC root netem delay 10ms reorder 25% 50%
+			#tc qdisc change dev eth0 root netem delay 100ms 75ms
+			# Rate limiting...
+			# not build into netem, htb or tbf will need to be used, skipping for now...
+		fi
+	done
+	echo "Network is now really slow and dropping packets like crazy..." | printText inf
+	echo "To go back to normal operation run ./net-check.sh recover" | printText inf
+	echo
+}
+
+function netRecov(){
+	for NIC in ${NICS[@]}; do
+		if [ "$NIC" == "lo" ]; then
+			# packet loss may not be effective on local loopback
+			continue
+		else
+			#echo "tc qdisc delete dev $NIC root netem delay 0"
+			tc qdisc delete dev $NIC root netem delay 0
+		fi
+	done
+	echo "All back to normal now..." | printText inf
+	echo
+}
+
+##################################################
 # Run the script...
 ##################################################
-#netCheck
-sizeMatters
-for NIC in ${NICS[@]}; do
-	if [ "$NIC" == "lo" ]; then
-		#i've not yet looked into local loop back optimisations
-		continue
-	else
-		adjustNic $NIC</dev/tty
-	fi
-done
-congestionControl
+
+if [ "$1" == "destroy" ]; then
+	#Network slow down... busy network emulation...
+	netSim
+elif [ "$1" == "recover" ]; then
+	#Network reset from destroy
+	netRecov
+else
+	#Normal Script
+	netCheck
+	sizeMatters
+	for NIC in ${NICS[@]}; do
+		if [ "$NIC" == "lo" ]; then
+			#i've not yet looked into local loop back optimisations
+			continue
+		else
+			adjustNic $NIC</dev/tty
+		fi
+	done
+	congestionControl
+fi
 
