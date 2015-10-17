@@ -7,7 +7,7 @@
 # Author: Michael Jones <mj@mikejonesey.co.uk>
 # Licence: GNU LGPL V3
 ##################################################
-# info sources, references and thanks:
+# References, info sources and thanks:
 # Stephen Hemminger, Bufferbloat, Linuxcon 2015
 # Alessandro Selli, Traffic Control, Linuxcon 2015
 # man pages: tcp, tcpdump, netstat
@@ -515,7 +515,7 @@ function netSim(){
 			#tc qdisc change dev $NIC root netem gap 5 delay 10ms
 			#echo "tc qdisc change dev $NIC root netem delay 10ms reorder 25% 50%"
 			tc qdisc change dev $NIC root netem delay 10ms reorder 25% 50%
-			#tc qdisc change dev eth0 root netem delay 100ms 75ms
+			#tc qdisc change dev $NIC root netem delay 100ms 75ms
 			# Rate limiting...
 			# not build into netem, htb or tbf will need to be used, skipping for now...
 		fi
@@ -551,7 +551,7 @@ elif [ "$1" == "recover" ]; then
 	netRecov
 else
 	#Normal Script
-	netCheck
+	#netCheck
 	sizeMatters
 	for NIC in ${NICS[@]}; do
 		if [ "$NIC" == "lo" ]; then
