@@ -10,7 +10,8 @@
 # info sources, references and thanks:
 # Stephen Hemminger, Bufferbloat, Linuxcon 2015
 # Alessandro Selli, Traffic Control, Linuxcon 2015
-# man pages: tcp
+# man pages: tcp, tcpdump
+# docs: systemtap
 # http://www.acc.umu.se/~maswan/linux-netperf.txt
 # http://www.bufferbloat.net/projects/codel/wiki
 #
@@ -71,6 +72,21 @@ function gigECheck(){
 	fi
 }
 
+function netCheck(){
+	title "Checking Network..."
+	which tcpdump &>/dev/null
+	if [ "$?" != "0" ]; then
+		echo "Please install tcpdump, or export PATH"
+	else
+		bInterface=$(ifconfig | sed 's/^$/~/' | tr "\n" "_" | sed 's/~/\n/g; s/_//g' | grep "RX" | sed 's/ .*RX bytes:/ /; s/ (.*//' | sort -k2 -n | tail -1 | awk '{print $1}')
+		# check for remote services causing issues / RST
+		tcpinfo=$(timeout 10 tcpdump -i$bInterface -n -v 'tcp[tcpflags] & (tcp-rst) != 0' 2>&1 | grep -v ^$)
+		
+	fi
+
+	read -p "Press enter to continue..."
+}
+
 function sizeMatters(){
 ##################################################
 # Sizes...
@@ -87,6 +103,27 @@ tcp_adv_win_scale=$(cat /proc/sys/net/ipv4/tcp_adv_win_scale)
 # (window/2^tcp_adv_win_scale)/0.150 = ...
 # (87380 - 87380/2^2)/0.150 = 436906 bytes/s, or about 400 kbyte/s
 # (873800 - 873800/2^2)/0.150 = 4369000 bytes/s, or about 4Mbytes/s
+
+# This will enusre that immediatly subsequent connections use these values (set to 1 to enable)
+#echo "/proc/sys/net/ipv4/route/flush"
+#cat /proc/sys/net/ipv4/route/flush
+
+# each driver sets it's own tx_ring, rx_ring
+# application can set SO_SNDBUF and SO_RCVBUF
+
+#man 7 socket
+# rmem_default = default size of receive buffers used by sockets (bytes)
+# wmem_default = default size of send buffers used by sockets (bytes)
+
+echo "Default tcp recieve buffer size: " | printText inf
+echo "/proc/sys/net/core/rmem_default" | printText pro
+cat /proc/sys/net/core/rmem_default | printText val
+echo
+
+echo "Default tcp send buffer size: " | printText inf
+echo "/proc/sys/net/core/wmem_default" | printText pro
+cat /proc/sys/net/core/wmem_default | printText val
+echo
 
 # Socket Buffer Size (bytes)
 #This sets the max OS receive buffer size for all types of connections.
@@ -119,27 +156,6 @@ echo "Maxiumum RAM for TCP: " | printText inf
 echo "/proc/sys/net/ipv4/tcp_mem [p] [p] [p]" | printText pro
 TCP_MEM=($(cat /proc/sys/net/ipv4/tcp_mem))
 cat /proc/sys/net/ipv4/tcp_mem | printText val
-echo
-
-# This will enusre that immediatly subsequent connections use these values (set to 1 to enable)
-#echo "/proc/sys/net/ipv4/route/flush"
-#cat /proc/sys/net/ipv4/route/flush
-
-# each driver sets it's own tx_ring, rx_ring
-# application can set SO_SNDBUF and SO_RCVBUF
-
-#man 7 socket
-# rmem_default = default size of receive buffers used by sockets (bytes)
-# wmem_default = default size of send buffers used by sockets (bytes)
-
-echo "Default tcp recieve buffer size: " | printText inf
-echo "/proc/sys/net/core/rmem_default" | printText pro
-cat /proc/sys/net/core/rmem_default | printText val
-echo
-
-echo "Default tcp send buffer size: " | printText inf
-echo "/proc/sys/net/core/wmem_default" | printText pro
-cat /proc/sys/net/core/wmem_default | printText val
 echo
 
 # overwritten by:
@@ -229,15 +245,19 @@ function adjustNic(){
 #+ cake : Common Applications Kept Enhanced (enhanced htb, fq_codel)
 
 echo "Default Queue Discipline" | printText inf
-echo "/proc/sys/net/core/default_qdisc" | printText pro
-cat /proc/sys/net/core/default_qdisc | printText val
-if [ "$(cat /proc/sys/net/core/default_qdisc)" != "fq_codel" ]; then
-	read -p "Would you like to set your default queue disciple to fq_codel? (y/n) [n] "
-	if [ "$REPLY" == "y" ]; then
-		sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
-		echo "net.core.default_qdisc = fq_codel" >> /etc/sysctl.conf
-		sysctl -p
+if [ -f "/proc/sys/net/core/default_qdisc" ]; then
+	echo "/proc/sys/net/core/default_qdisc" | printText pro
+	cat /proc/sys/net/core/default_qdisc | printText val
+	if [ "$(cat /proc/sys/net/core/default_qdisc)" != "fq_codel" ]; then
+		read -p "Would you like to set your default queue disciple to fq_codel? (y/n) [n] "
+		if [ "$REPLY" == "y" ]; then
+			sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+			echo "net.core.default_qdisc = fq_codel" >> /etc/sysctl.conf
+			sysctl -p
+		fi
 	fi
+else
+	echo "Upgrade your kernel..." | printText val
 fi
 echo
 
@@ -256,8 +276,8 @@ ip link list dev $NIC | head -1 | grep -o "qdisc [a-z_]*" | printText val
 curqdisc=$(ip link list dev $NIC | head -1 | grep -o "qdisc [a-z_]*" | awk '{print $2}')
 # check if eth or wifi
 if [ -d "/sys/class/net/$NIC/phy80211" ]; then
+	echo "Detected nic $NIC is wifi, preffered qdisc is mq, current qdisc is $curqdisc" | printText inf
 	if [ "$curqdisc" != "mq" ]; then
-		echo "Detected nic $NIC is wifi, preffered qdisc is mq, current qdisc is $curqdisc" | printText inf
 		read -p "Set queue discipline to mq for $NIC? (y/n) [n] "
 		if [ "$REPLY" == "y" ]; then
 			#tc qdisc replace dev $NIC root mq
@@ -269,12 +289,21 @@ if [ -d "/sys/class/net/$NIC/phy80211" ]; then
 		fi
 	fi
 else
-	if [ "$curqdisc" != "fq_codel" ]; then
-		echo "Detected nic $NIC is ethernet" | printText inf
-		read -p "Set queue discipline to fq_codel for $NIC? (y/n) [n] "
-		if [ "$REPLY" == "y" ]; then
-			tc qdisc replace dev $NIC root fq_codel
+	echo "Detected nic $NIC is ethernet" | printText inf
+	kernelCheck "3.1.0"
+	if [ "$?" == "0" ]; then
+		#todo, check for really big nextwork, (suggest sch_fq).
+		if [ "$curqdisc" != "fq_codel" ]; then
+			read -p "Set queue discipline to fq_codel for $NIC? (y/n) [n] "
+			if [ "$REPLY" == "y" ]; then
+				tc qdisc replace dev $NIC root fq_codel
+			fi
 		fi
+	else
+		# Older kernel optimisation
+		echo "Preffered queue discipline is the Hierarchy Token Bucket" | printText inf
+		echo "Upgrade kernel for better queueing" | printText inf
+		echo "todo..." | printText val
 	fi
 fi
 # /sys/class/net
@@ -285,8 +314,8 @@ echo
 # anything else. Old kernels have shipped with a default txqueuelen of 100,
 # which is definately too low and hurts performance.
 echo "Queue Length for $NIC" | printText inf
-ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*" | printText val
-curquelen=$(ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*" | sed 's/.* //')
+ip link list dev $NIC | head -1 | grep -o "qlen [0-9]*" | printText val
+curquelen=$(ip link list dev $NIC | head -1 | grep -o "qlen [0-9]*" | sed 's/.* //')
 if [[ -z "$curquelen" || "$curquelen" -lt "1001" ]]; then
 	if [[ -z "$curquelen" || "$curquelen" -lt "1000" ]]; then
 		echo "Queue length is too small"
@@ -300,10 +329,10 @@ if [[ -z "$curquelen" || "$curquelen" -lt "1001" ]]; then
 	read -p "Select option (1|2|s) [s] "
 	if [ "$REPLY" == "1" ]; then
 		ip link set dev $NIC txqueuelen 1000
-		ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*" | printText val
+		ip link list dev $NIC | head -1 | grep -o "qlen [0-9]*" | printText val
 	elif [ "$REPLY" == "2" ]; then
 		ip link set dev $NIC txqueuelen 2000
-		ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*" | printText val
+		ip link list dev $NIC | head -1 | grep -o "qlen [0-9]*" | printText val
 	fi
 fi
 echo
@@ -428,9 +457,15 @@ read -p "Press enter to continue..."
 ##################################################
 # Run the script...
 ##################################################
+#netCheck
 sizeMatters
 for NIC in ${NICS[@]}; do
-	adjustNic $NIC</dev/tty
+	if [ "$NIC" == "lo" ]; then
+		#i've not yet looked into local loop back optimisations
+		continue
+	else
+		adjustNic $NIC</dev/tty
+	fi
 done
 congestionControl
 
