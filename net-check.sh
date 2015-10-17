@@ -45,6 +45,32 @@ function title(){
 	echo "##################################################"
 }
 
+function kernelCheck(){
+	curKern=($(uname -r | sed 's/-.*//; s/\./ /g'))
+	parsedKern=($(echo "$1" | sed 's/-.*//; s/\./ /g'))
+	if [ "${curKern[0]}" -gt "${parsedKern[0]}" ]; then
+		# Kerner Greater
+		return 0
+	elif [ "${curKern[0]}" == "${parsedKern[0]}" -a "${curKern[1]}" -gt "${parsedKern[1]}" ]; then
+		# Major Version Greater
+		return 0
+	elif [ "${curKern[0]}" == "${parsedKern[0]}" -a "${curKern[1]}" -gt "${parsedKern[1]}" ]; then
+		# Minor Version Greater
+		return 0
+	else
+		return 1
+	fi
+}
+
+function gigECheck(){
+	#todo, something better than ethtool for this, (gig wireless won't be picked up...)
+	if [ -n "$(ethtool "$1" | grep 1000base)" ]; then
+		return 0
+	else
+		return 1
+	fi
+}
+
 function sizeMatters(){
 ##################################################
 # Sizes...
@@ -159,7 +185,6 @@ echo "Pressure connections will be $slow_speed_guess Mbytes/s ($slow_speed_guess
 echo "RAM used by networking at optimum: $ram_at_optimum_usage MB" | printText atn
 echo "Max RAM used by networking: $max_networking_ram MB" | printText atn
 echo
-read -p "Press enter to continue..."
 
 # Que disciplines have their own buffers ontop of OS buffer
 
@@ -168,6 +193,7 @@ read -p "Press enter to continue..."
 # Capacity of CPU to keep up with the flux (load, jiffies)
 
 # Number of hops (switches, routers)...
+read -p "Press enter to continue..."
 }
 
 function adjustNic(){
@@ -202,7 +228,7 @@ function adjustNic(){
 #+ mq : Muliqueue dummy scheduler, aka RSS (Receive Side Scaling)
 #+ cake : Common Applications Kept Enhanced (enhanced htb, fq_codel)
 
-echo "Maximum backlog size (packets)" | printText inf
+echo "Default Queue Discipline" | printText inf
 echo "/proc/sys/net/core/default_qdisc" | printText pro
 cat /proc/sys/net/core/default_qdisc | printText val
 if [ "$(cat /proc/sys/net/core/default_qdisc)" != "fq_codel" ]; then
@@ -230,9 +256,9 @@ ip link list dev $NIC | head -1 | grep -o "qdisc [a-z_]*" | printText val
 curqdisc=$(ip link list dev $NIC | head -1 | grep -o "qdisc [a-z_]*" | awk '{print $2}')
 # check if eth or wifi
 if [ -d "/sys/class/net/$NIC/phy80211" ]; then
-#	if [ "$curqdisc" != "mq" ]; then
+	if [ "$curqdisc" != "mq" ]; then
 		echo "Detected nic $NIC is wifi, preffered qdisc is mq, current qdisc is $curqdisc" | printText inf
-		read -p "Set queue discipline to mq?"
+		read -p "Set queue discipline to mq for $NIC? (y/n) [n] "
 		if [ "$REPLY" == "y" ]; then
 			#tc qdisc replace dev $NIC root mq
 			tc qdisc replace dev $NIC handle 1 root mq
@@ -241,11 +267,11 @@ if [ -d "/sys/class/net/$NIC/phy80211" ]; then
 			tc qdisc replace dev $NIC parent 1:3 fq_codel
 			tc qdisc replace dev $NIC parent 1:4 fq_codel noecn
 		fi
-#	fi
+	fi
 else
 	if [ "$curqdisc" != "fq_codel" ]; then
 		echo "Detected nic $NIC is ethernet" | printText inf
-		read -p "Set queue discipline to fq_codel?"
+		read -p "Set queue discipline to fq_codel for $NIC? (y/n) [n] "
 		if [ "$REPLY" == "y" ]; then
 			tc qdisc replace dev $NIC root fq_codel
 		fi
@@ -255,14 +281,32 @@ fi
 echo
 
 # Default que length for dev
-echo "Queue Length for $NIC" | printText inf
-ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*" | printText val
-echo
-
 # For the txqueuelen, this is mostly relevant for gigE, but should not hurt
 # anything else. Old kernels have shipped with a default txqueuelen of 100,
 # which is definately too low and hurts performance.
-ip link set dev $NIC txqueuelen 3000
+echo "Queue Length for $NIC" | printText inf
+ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*" | printText val
+curquelen=$(ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*" | sed 's/.* //')
+if [[ -z "$curquelen" || "$curquelen" -lt "1001" ]]; then
+	if [[ -z "$curquelen" || "$curquelen" -lt "1000" ]]; then
+		echo "Queue length is too small"
+	else
+		echo "Queue length could be optimised"
+	fi
+	echo "Set queue len to: "
+	echo "1. 1000 (Minimum Reccomeneded)"
+	echo "2. 2000 (a larger queue)"
+	echo "s. skip (no change)"
+	read -p "Select option (1|2|s) [s] "
+	if [ "$REPLY" == "1" ]; then
+		ip link set dev $NIC txqueuelen 1000
+		ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*" | printText val
+	elif [ "$REPLY" == "2" ]; then
+		ip link set dev $NIC txqueuelen 2000
+		ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*" | printText val
+	fi
+fi
+echo
 
 # Queues are run by the kernel at each jiffy
 # Jiffies are set to:
@@ -283,46 +327,80 @@ ip link set dev $NIC txqueuelen 3000
 # ways to use more bandwidth:
 # jumbo frames
 #1500, 2304, 4000, 9000
-JUMBOSIZE=4000
+echo "Frame size for $NIC" | printText inf
+ip link list dev $NIC | head -1 | grep -o "mtu [0-9]*" | printText val
 CURRENT_MTU=$(ip link list dev $NIC | head -1 | grep -o "mtu [0-9]*" | awk '{print $2}')
-echo "setting jumbo Max Transfer Unit size of $JUMBOSIZE"
-ip link set dev $NIC mtu $JUMBOSIZE 2>/dev/null
-if [ "$?" == "0" ]; then
-	#test larger page
-	# 20 bytes for the internet protocol header
-	# 8 bytes for the ICMP header and timestamp
-	echo "Testing new frame size..."
-	ping -M do -c 4 -s $(($JUMBOSIZE-28)) 10.10.0.1 &>/dev/null
-	if [ "$?" != "0" ]; then
-		echo "Frame size not good, setting to 1500 (normal)."
+if [ "$CURRENT_MTU" -lt "1500" ]; then
+	read -p "Increase mtu to mininum reccomended size? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
 		ip link set dev $NIC mtu 1500
-	else
-		echo "Test Passed, with frame size: $JUMBOSIZE"
 	fi
-else
-	echo "Skipping test, changing frame size failed."
 fi
-# large recieve offload (LRO over GRO) instead of generic receive offload
+if [ "$CURRENT_MTU" -lt "1501" ]; then
+	kernelCheck "2.6.17"
+	if [ "$?" != "0" ]; then
+		echo "Kernel version $(uname -r) does not support jumbo frames" | printText inf
+	else
+		echo "Kernel version $(uname -r) supports jumbo frames" | printText inf
+		gigECheck "$NIC"
+		if [ "$?" != "0" ]; then
+			echo "$NIC is not gigE, Jumbo frames not reccomended" | printText inf
+		else
+			JUMBOSIZE=4000
+			echo "setting jumbo Max Transfer Unit size of $JUMBOSIZE"
+			ip link set dev $NIC mtu $JUMBOSIZE 2>/dev/null
+			if [ "$?" == "0" ]; then
+				#test larger page
+				# 20 bytes for the internet protocol header
+				# 8 bytes for the ICMP header and timestamp
+				echo "Testing new frame size..."
+				ping -M do -c 4 -s $(($JUMBOSIZE-28)) 10.10.0.1 &>/dev/null
+				if [ "$?" != "0" ]; then
+					echo "Frame size not good, setting to 1500 (normal)."
+					ip link set dev $NIC mtu 1500
+				else
+					echo "Test Passed, with frame size: $JUMBOSIZE"
+				fi
+			else
+				echo "Skipping test, changing frame size failed."
+			fi
+		fi
+	fi
+fi
+echo
+
+# large recieve offload (LRO over GRO)
+# generic receive offload
 # ideal for proxies, proxy based apps, IDS, IPS, firewall, server apps recieving vast amounts of packets.
 # implemented in Linux 2.6 kernel
-ethtool -K $NIC gro off
-read -p "Large recieve offload? (y/n) [y] "
-if [ "$REPLY" == "y" ]; then
-	ethtool -K $NIC lro on
+kernelCheck "2.6.0"
+if [ "$?" != "0" ]; then
+	echo "Kernel $(uname -r) does not support LRO" | printText inf
 else
-	ethtool -K $NIC lro off
+	echo "Kernel $(uname -r) does support LRO" | printText inf
+	ethtool -K $NIC gro off
+	read -p "Large recieve offload? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		ethtool -K $NIC lro on
+	else
+		ethtool -K $NIC lro off 2>/dev/null
+	fi
 fi
 
 # qdisc queue not single packets data
 
 # full duplex
 #ethtool -s $NIC speed 100 duplex full
+read -p "Press enter to continue..."
 }
 
 function congestionControl(){
 ##################################################
 # Congestion Control
 ##################################################
+
+title "Congestion Control..."
+
 #modprobe tcp_bic
 #modprobe tcp_cubic [default]
 #modprobe tcp_highspeed
@@ -333,12 +411,18 @@ function congestionControl(){
 #modprobe tcp_yeah
 
 # availible
-echo "/proc/sys/net/ipv4/tcp_available_congestion_control"
-cat /proc/sys/net/ipv4/tcp_available_congestion_control
+echo "Loaded / Availible congestion control modules: " | printText inf
+echo "/proc/sys/net/ipv4/tcp_available_congestion_control" | printText pro
+cat /proc/sys/net/ipv4/tcp_available_congestion_control | printText val
+echo
 
 # current
-echo "/proc/sys/net/ipv4/tcp_congestion_control"
-cat /proc/sys/net/ipv4/tcp_congestion_control
+echo "Current congestion control modules: " | printText inf
+echo "/proc/sys/net/ipv4/tcp_congestion_control" | printText pro
+cat /proc/sys/net/ipv4/tcp_congestion_control | printText val
+echo
+
+read -p "Press enter to continue..."
 }
 
 ##################################################
