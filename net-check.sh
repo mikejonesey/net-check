@@ -1,5 +1,15 @@
 #!/bin/bash
-# info sources:
+##################################################
+# Name: net-check.sh
+# Desc: A performance analysis and suggestion tool for faster linux networking.
+# The goal of this script is to clearly identify and explain each tunable for networking performance.
+# Date: 17/10/2015
+# Author: Michael Jones <mj@mikejonesey.co.uk>
+# Licence: GNU LGPL V3
+##################################################
+# info sources, references and thanks:
+# Stephen Hemminger, Bufferbloat, Linuxcon 2015
+# Alessandro Selli, Traffic Control, Linuxcon 2015
 # man pages: tcp
 # http://www.acc.umu.se/~maswan/linux-netperf.txt
 # http://www.bufferbloat.net/projects/codel/wiki
@@ -11,6 +21,9 @@ function printText(){
 	if [ "$1" == "inf" ]; then
 		#info
 		printf "\e[0;33m"
+	elif [ "$1" == "atn" ]; then
+		#attention
+		printf "\e[1;33m"
 	elif [ "$1" == "pro" ]; then
 		#property
 		printf "\e[0;32m"
@@ -25,10 +38,19 @@ function printText(){
 	echo -ne "\e[0m"
 }
 
+function title(){
+	clear
+	echo "##################################################"
+	echo "# $1..."
+	echo "##################################################"
+}
+
 function sizeMatters(){
 ##################################################
 # Sizes...
 ##################################################
+
+title "Sizes..."
 
 PAGE_SIZE=$(getconf PAGESIZE)
 tcp_adv_win_scale=$(cat /proc/sys/net/ipv4/tcp_adv_win_scale)
@@ -106,21 +128,6 @@ echo "/proc/sys/net/ipv4/tcp_rmem [b] [b] [b]" | printText pro
 cat /proc/sys/net/ipv4/tcp_rmem | printText val
 echo
 
-calc_max_tcp_no_pressure_bytes=$(echo "${TCP_MEM[1]}*$PAGE_SIZE" | bc)
-calc_max_tcp_con_no_pressure=$(echo "scale=0; $calc_max_tcp_no_pressure_bytes/${TCP_RMEM[1]}" | bc)
-speed_guess=$(echo "scale=2; ((${TCP_RMEM[1]}-(${TCP_RMEM[1]}/2^$tcp_adv_win_scale))/0.150)/1000000" | bc)
-speed_guess_mbps=$(echo "scale=2; $speed_guess*8" | bc)
-slow_speed_guess=$(echo "scale=2; ((${TCP_RMEM[0]}-(${TCP_RMEM[0]}/2^$tcp_adv_win_scale))/0.150)/1000000" | bc)
-slow_speed_guess_mbps=$(echo "scale=2; $slow_speed_guess*8" | bc)
-ram_at_optimum_usage=$(echo "scale=2; $calc_max_tcp_no_pressure_bytes/1000000" | bc)
-max_networking_ram=$(echo "scale=2; (${TCP_MEM[2]}*$PAGE_SIZE)/1000000" | bc)
-
-echo "Max connections $calc_max_tcp_con_no_pressure with optimum throughput of $speed_guess Mbytes/s ($speed_guess_mbps Mbps)"
-echo "Pressure connections will be $slow_speed_guess Mbytes/s ($slow_speed_guess_mbps Mbps)"
-echo "RAM used by networking at optimum: $ram_at_optimum_usage MB"
-echo "Max RAM used by networking: $max_networking_ram MB"
-echo
-
 # Every TCP socket has this much buffer space to use before the buffer is filled up
 #20 (ms) * 100 (Mbps) = 0.02 * 100 / 8 * 1024 = 256 KB
 echo "[b]1 minimum TCP send buffer space available for a single TCP socket" | printText inf
@@ -130,10 +137,29 @@ echo "/proc/sys/net/ipv4/tcp_wmem [b] [b] [b]" | printText pro
 cat /proc/sys/net/ipv4/tcp_wmem | printText val
 echo
 
-# Maximum backlog size (default 1000 packets)
+# Maximum backlog size
+# Sets the maximum number of packets allowed to queue when a particular interface receives packets faster than the kernel can process them.
+# The default value for this file is 300 in older kernels and 1000 in newer kernels.
+echo "Maximum backlog size (packets)" | printText inf
 echo "/proc/sys/net/core/netdev_max_backlog" | printText pro
 cat /proc/sys/net/core/netdev_max_backlog | printText val
 echo
+
+calc_max_tcp_no_pressure_bytes=$(echo "${TCP_MEM[1]}*$PAGE_SIZE" | bc)
+calc_max_tcp_con_no_pressure=$(echo "scale=0; $calc_max_tcp_no_pressure_bytes/${TCP_RMEM[1]}" | bc)
+speed_guess=$(echo "scale=2; ((${TCP_RMEM[1]}-(${TCP_RMEM[1]}/2^$tcp_adv_win_scale))/0.150)/1000000" | bc)
+speed_guess_mbps=$(echo "scale=2; $speed_guess*8" | bc)
+slow_speed_guess=$(echo "scale=2; ((${TCP_RMEM[0]}-(${TCP_RMEM[0]}/2^$tcp_adv_win_scale))/0.150)/1000000" | bc)
+slow_speed_guess_mbps=$(echo "scale=2; $slow_speed_guess*8" | bc)
+ram_at_optimum_usage=$(echo "scale=2; $calc_max_tcp_no_pressure_bytes/1000000" | bc)
+max_networking_ram=$(echo "scale=2; (${TCP_MEM[2]}*$PAGE_SIZE)/1000000" | bc)
+
+echo "Max connections $calc_max_tcp_con_no_pressure with optimum throughput of $speed_guess Mbytes/s ($speed_guess_mbps Mbps)" | printText atn
+echo "Pressure connections will be $slow_speed_guess Mbytes/s ($slow_speed_guess_mbps Mbps)" | printText atn
+echo "RAM used by networking at optimum: $ram_at_optimum_usage MB" | printText atn
+echo "Max RAM used by networking: $max_networking_ram MB" | printText atn
+echo
+read -p "Press enter to continue..."
 
 # Que disciplines have their own buffers ontop of OS buffer
 
@@ -145,7 +171,7 @@ echo
 }
 
 function adjustNic(){
-	echo "Processing $NIC"
+	title "Processing nic: $NIC"
 ##################################################
 # Queueing Schedulers
 ##################################################
@@ -176,8 +202,18 @@ function adjustNic(){
 #+ mq : Muliqueue dummy scheduler, aka RSS (Receive Side Scaling)
 #+ cake : Common Applications Kept Enhanced (enhanced htb, fq_codel)
 
-echo "/proc/sys/net/core/default_qdisc"
-cat /proc/sys/net/core/default_qdisc
+echo "Maximum backlog size (packets)" | printText inf
+echo "/proc/sys/net/core/default_qdisc" | printText pro
+cat /proc/sys/net/core/default_qdisc | printText val
+if [ "$(cat /proc/sys/net/core/default_qdisc)" != "fq_codel" ]; then
+	read -p "Would you like to set your default queue disciple to fq_codel? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+		echo "net.core.default_qdisc = fq_codel" >> /etc/sysctl.conf
+		sysctl -p
+	fi
+fi
+echo
 
 # Que Filters
 # ematch : Extended matches for use with "basic" or "flow" filters
@@ -186,19 +222,42 @@ cat /proc/sys/net/core/default_qdisc
 #	eBPF : Extended Berkeley Packet Filter
 
 # Default qdisc for dev
-echo "Queue Discipline for $NIC"
-ip link list dev $NIC | head -1 | grep -o "qdisc [a-z_]*"
+#Changing them
+#voice, video, best effort and background
+#tc qdisc replace dev $NIC root prio
+echo "Queue discipline for $NIC" | printText inf
+ip link list dev $NIC | head -1 | grep -o "qdisc [a-z_]*" | printText val
+curqdisc=$(ip link list dev $NIC | head -1 | grep -o "qdisc [a-z_]*" | awk '{print $2}')
+# check if eth or wifi
+if [ -d "/sys/class/net/$NIC/phy80211" ]; then
+#	if [ "$curqdisc" != "mq" ]; then
+		echo "Detected nic $NIC is wifi, preffered qdisc is mq, current qdisc is $curqdisc" | printText inf
+		read -p "Set queue discipline to mq?"
+		if [ "$REPLY" == "y" ]; then
+			#tc qdisc replace dev $NIC root mq
+			tc qdisc replace dev $NIC handle 1 root mq
+			tc qdisc replace dev $NIC parent 1:1 fq_codel noecn
+			tc qdisc replace dev $NIC parent 1:2 fq_codel
+			tc qdisc replace dev $NIC parent 1:3 fq_codel
+			tc qdisc replace dev $NIC parent 1:4 fq_codel noecn
+		fi
+#	fi
+else
+	if [ "$curqdisc" != "fq_codel" ]; then
+		echo "Detected nic $NIC is ethernet" | printText inf
+		read -p "Set queue discipline to fq_codel?"
+		if [ "$REPLY" == "y" ]; then
+			tc qdisc replace dev $NIC root fq_codel
+		fi
+	fi
+fi
+# /sys/class/net
 echo
 
 # Default que length for dev
-echo "Queue Length for $NIC"
-ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*"
+echo "Queue Length for $NIC" | printText inf
+ip link list dev $NIC | head -1 | grep -o "default qlen [0-9]*" | printText val
 echo
-
-#Changing them
-#voice, video, best effort and background
-###tc qdisc replace dev $NIC root fq_codel
-#tc qdisc replace dev $NIC root prio
 
 # For the txqueuelen, this is mostly relevant for gigE, but should not hurt
 # anything else. Old kernels have shipped with a default txqueuelen of 100,
@@ -286,8 +345,8 @@ cat /proc/sys/net/ipv4/tcp_congestion_control
 # Run the script...
 ##################################################
 sizeMatters
-for NIC in $NICS; do
-	adjustNic $NIC
+for NIC in ${NICS[@]}; do
+	adjustNic $NIC</dev/tty
 done
 congestionControl
 
