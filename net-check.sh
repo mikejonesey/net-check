@@ -173,6 +173,13 @@ SOC_BUF_SIZE="16777216"
 #SOC_BUF_SIZE="134217728"
 
 ##################################################
+# AUTO TUNING
+##################################################
+
+# auto recieve buffer size and tcp window size
+TCP_RMEM_AUTO=$(cat /proc/sys/net/ipv4/tcp_moderate_rcvbuf 2>/dev/null)
+
+##################################################
 # tcp_adv_win_scale
 ##################################################
 # This variable is used to tell the kernel how much of the socket buffer space should be used for TCP window size, and how much to save for an application buffer.
@@ -202,32 +209,14 @@ tcp_adv_win_scale=$(cat /proc/sys/net/ipv4/tcp_adv_win_scale)
 # rmem_default = default size of receive buffers used by sockets (bytes)
 # wmem_default = default size of send buffers used by sockets (bytes)
 
-echo "Default tcp recieve buffer size: " | printText inf
+echo "Default UNIX recieve buffer size: " | printText inf
 echo "/proc/sys/net/core/rmem_default" | printText pro
 cat /proc/sys/net/core/rmem_default | printText val
-if [ "$(cat /proc/sys/net/core/rmem_default)" != "$SOC_BUF_SIZE" ]; then
-	read -p "Set rmem_default to the custom socket buffer size of $SOC_BUF_SIZE? (y/n) [n] "
-	if [ "$REPLY" == "y" ]; then
-		sed -i "s/^\(net.core.rmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
-		sysctl -w net.core.rmem_default=$SOC_BUF_SIZE >> /etc/sysctl.conf
-		echo "Restart applications like apache, if ReceiveBufferSize has not been customised it will get the new value"
-		echo "In custom applications set the SO_RCVBUF to the same value."
-	fi
-fi
 echo
 
-echo "Default tcp send buffer size: " | printText inf
+echo "Default UNIX send buffer size: " | printText inf
 echo "/proc/sys/net/core/wmem_default" | printText pro
 cat /proc/sys/net/core/wmem_default | printText val
-if [ "$(cat /proc/sys/net/core/wmem_default)" != "$SOC_BUF_SIZE" ]; then
-	read -p "Set wmem_default to the custom socket buffer size of $SOC_BUF_SIZE? (y/n) [n] "
-	if [ "$REPLY" == "y" ]; then
-		sed -i "s/^\(net.core.wmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
-		sysctl -w net.core.wmem_default=$SOC_BUF_SIZE >> /etc/sysctl.conf
-		echo "Restart applications like apache, if SendBufferSize has not been customised it will get the new value"
-		echo "In custom applications set the SO_SNDBUF to the same value."
-	fi
-fi
 echo
 
 # Socket Buffer Size (bytes)
@@ -235,12 +224,43 @@ echo
 echo "Maxiumum receive buffer size for all connections: " | printText inf
 echo "/proc/sys/net/core/rmem_max" | printText pro
 cat /proc/sys/net/core/rmem_max | printText val
+if [ "$(cat /proc/sys/net/core/rmem_max)" != "$SOC_BUF_SIZE" ]; then
+	read -p "Set rmem_max to the custom socket buffer size of $SOC_BUF_SIZE? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.core.rmem_max.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.core.rmem_max=$SOC_BUF_SIZE >> /etc/sysctl.conf
+		if [ "$TCP_RMEM_AUTO" == "1" ]; then
+			echo "setsockopt() disables autotuning, don't use it."
+			echo "Restart applications like apache, unset ReceiveBufferSize if the setting has been customised."
+			echo "In custom applications unset the SO_RCVBUF"
+		else
+			echo "setsockopt() enables utilising the full buffer."
+			echo "Restart applications like apache, if SendBufferSize has not been customised it will get the new value."
+			echo "In custom applications set the SO_RCVBUF to the same value."
+		fi
+	fi
+fi
 echo
 
 #This sets the max OS send buffer size for all types of connections.
 echo "Maxiumum receive buffer size for all connections: " | printText inf
 echo "/proc/sys/net/core/wmem_max" | printText pro
 cat /proc/sys/net/core/wmem_max | printText val
+if [ "$(cat /proc/sys/net/core/wmem_max)" != "$SOC_BUF_SIZE" ]; then
+	read -p "Set wmem_max to the custom socket buffer size of $SOC_BUF_SIZE? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.core.wmem_max.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.core.wmem_max=$SOC_BUF_SIZE >> /etc/sysctl.conf
+		if [ "$TCP_RMEM_AUTO" == "1" ]; then
+			echo "setsockopt() disables autotuning, don't use it."
+			echo "Restart applications like apache, unset ReceiveBufferSize if the setting has been customised."
+			echo "In custom applications unset the SO_RCVBUF"
+		else
+			echo "Restart applications like apache, if SendBufferSize has not been customised it will get the new value."
+			echo "In custom applications set the SO_SNDBUF to the same value."
+		fi
+	fi
+fi
 echo
 
 #The tcp_mem variable defines how the TCP stack should behave when it comes to memory usage. 
@@ -272,8 +292,6 @@ echo "[b]1 minimum receive buffer for each TCP connection, this buffer is always
 echo "[b]2 default receive buffer allocated for each TCP socket. This value overrides the net.core.rmem_default value used by other protocols." | printText inf
 echo "[b]3 maximum receive buffer that can be allocated for a TCP socket" | printText inf
 TCP_RMEM=($(cat /proc/sys/net/ipv4/tcp_rmem))
-# auto recieve buffer size and tcp window size
-TCP_RMEM_AUTO=$(cat /proc/sys/net/ipv4/tcp_moderate_rcvbuf 2>/dev/null)
 if [[ -f "/proc/sys/net/ipv4/tcp_moderate_rcvbuf" && "$TCP_RMEM_AUTO" == "1" ]]; then
 	echo -e "/proc/sys/net/ipv4/tcp_rmem [b] \e[1;32m[b (auto)]\e[0m [b]" | printText pro
 else
