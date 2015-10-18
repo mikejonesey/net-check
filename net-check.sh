@@ -15,7 +15,15 @@
 # http://www.acc.umu.se/~maswan/linux-netperf.txt
 # http://www.bufferbloat.net/projects/codel/wiki
 # http://www.linuxfoundation.org/collaborate/workgroups/networking/netem
-#
+# http://luxik.cdi.cz/~devik/qos/htb/manual/theory.htm
+# https://www.frozentux.net/ipsysctl-tutorial/chunkyhtml/tcpvariables.html
+# http://web.archive.org/web/20150214142136/https://www.frozentux.net/ipsysctl-tutorial/chunkyhtml/tcpvariables.html (for images / graph)
+# https://www.frozentux.net/ipsysctl-tutorial/chunkyhtml/otherresources.html
+# https://fasterdata.es.net/host-tuning/linux/
+# http://www.psc.edu/index.php/networking/641-tcp-tune
+# https://gettys.wordpress.com/2010/12/03/introducing-the-criminal-mastermind-bufferbloat/
+# http://www.psc.edu/index.php/networking/641-tcp-tune#Linux
+
 
 NICS=($(ls -1 /sys/class/net/))
 
@@ -53,10 +61,10 @@ function kernelCheck(){
 	if [ "${curKern[0]}" -gt "${parsedKern[0]}" ]; then
 		# Kerner Greater
 		return 0
-	elif [ "${curKern[0]}" == "${parsedKern[0]}" -a "${curKern[1]}" -gt "${parsedKern[1]}" ]; then
+	elif [ "${curKern[0]}" -ge "${parsedKern[0]}" -a "${curKern[1]}" -gt "${parsedKern[1]}" ]; then
 		# Major Version Greater
 		return 0
-	elif [ "${curKern[0]}" == "${parsedKern[0]}" -a "${curKern[1]}" -gt "${parsedKern[1]}" ]; then
+	elif [ "${curKern[0]}" -ge "${parsedKern[0]}" -a "${curKern[1]}" -ge "${parsedKern[1]}" -a "${curKern[2]}" -ge "${parsedKern[2]}" ]; then
 		# Minor Version Greater
 		return 0
 	else
@@ -120,7 +128,60 @@ function sizeMatters(){
 
 title "Sizes..."
 
+##################################################
+# INTRO
+##################################################
+
+# /proc/sys/net/core/optmem_max
+# frozentux stated tcp_mem and tcp_wmem can be finetuned but tcp_rmem should be autotuned by OS.
+# autotuning does apply to tcp_rmem, so this makes sense, but;
+# 80% of websites seem to say tcp_mem should be autotuned fine by the OS.
+# fasterdata.es.net wrote tcp_mem and optmem_max should be autotuned by OS.
+
+# "Logical" thinking:
+# the OS knows how much memory you have availible and can allocate pretty good values for tcp_mem (this could be tuned further, but should be pretty good as is).
+# the OS does not know what applications or usage you will be applying (volume vs 
+# in short;
+# (userspace vs networking), i'd expect autotuned by OS.
+# tcp (size vs quantity) i'd expect some tweeking even if the OS does pretty good guessing.
+# therefore i'd expect tcp_mem to be fine, but tcp_rmem and tcp_wmem to need a small amount of tweeeking.
+
+# tcp autotuning was introduced in linux 2.6.6 and 2.4.16 (this adjusts the tcp_rmem and default dynamically, up to the defined max).
+# eg; /proc/sys/net/ipv4/tcp_rmem [MIN] [AUTO] [MAX]; the min and max can still be tweeked, but the kernel should adjust the default automagically.
+# autotuning does not apply to rmem_default or wmem_default, these should still be set to the preffered buffer size.
+# to check if autotuning is switched on check: /proc/sys/net/ipv4/tcp_moderate_rcvbuf
+
 PAGE_SIZE=$(getconf PAGESIZE)
+
+##################################################
+# BUFFER SIZE
+##################################################
+# a smaller buffer means slower rate of data sent
+# an oversized buffer will cause applications to misbehave.
+# I would stick with 16MB or 32MB
+
+# 16MB for the norm gigE
+SOC_BUF_SIZE="16777216"
+
+# 32 MB for host with a 10G NIC
+#SOC_BUF_SIZE="33554432"
+
+# 64 MB for host with a 10G/40G NIC
+#SOC_BUF_SIZE="67108864"
+
+# 128 MB for host with a 40G NIC
+#SOC_BUF_SIZE="134217728"
+
+##################################################
+# tcp_adv_win_scale
+##################################################
+# This variable is used to tell the kernel how much of the socket buffer space should be used for TCP window size, and how much to save for an application buffer.
+# If tcp_adv_win_scale is negative, the following equation is used to calculate the buffer overhead for window scaling: 
+# bytes - (bytes/2^-tcp_adv_win_scale)
+# Where bytes are the amount of bytes in the window. If the tcp_adv_win_scale value is positive, the following equation is used to calculate the buffer overhead: 
+# bytes / 2^tcp_adv_win_scale
+# The tcp_adv_win_scale variable takes an integer value and is per default set to 2. 
+# This in turn means that the application buffer is 1/4th of the total buffer space specified in the tcp_rmem variable.
 tcp_adv_win_scale=$(cat /proc/sys/net/ipv4/tcp_adv_win_scale)
 
 # speed math...
@@ -144,11 +205,29 @@ tcp_adv_win_scale=$(cat /proc/sys/net/ipv4/tcp_adv_win_scale)
 echo "Default tcp recieve buffer size: " | printText inf
 echo "/proc/sys/net/core/rmem_default" | printText pro
 cat /proc/sys/net/core/rmem_default | printText val
+if [ "$(cat /proc/sys/net/core/rmem_default)" != "$SOC_BUF_SIZE" ]; then
+	read -p "Set rmem_default to the custom socket buffer size of $SOC_BUF_SIZE? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.core.rmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.core.rmem_default=$SOC_BUF_SIZE >> /etc/sysctl.conf
+		echo "Restart applications like apache, if ReceiveBufferSize has not been customised it will get the new value"
+		echo "In custom applications set the SO_RCVBUF to the same value."
+	fi
+fi
 echo
 
 echo "Default tcp send buffer size: " | printText inf
 echo "/proc/sys/net/core/wmem_default" | printText pro
 cat /proc/sys/net/core/wmem_default | printText val
+if [ "$(cat /proc/sys/net/core/wmem_default)" != "$SOC_BUF_SIZE" ]; then
+	read -p "Set wmem_default to the custom socket buffer size of $SOC_BUF_SIZE? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.core.wmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.core.wmem_default=$SOC_BUF_SIZE >> /etc/sysctl.conf
+		echo "Restart applications like apache, if SendBufferSize has not been customised it will get the new value"
+		echo "In custom applications set the SO_SNDBUF to the same value."
+	fi
+fi
 echo
 
 # Socket Buffer Size (bytes)
@@ -189,11 +268,25 @@ echo
 # default ???
 # max (On Linux 2.4, the default is 87380*2 bytes, lowered to 87380 in low-memory systems).
 echo "[b]1 minimum receive buffer for each TCP connection, this buffer is always allocated to a TCP socket, even under high pressure on the system." | printText inf
-echo "[b]2 default receive buffer allocated for each TCP socket. This value overrides the /proc/sys/net/core/rmem_default value used by other protocols." | printText inf
+# With autotuning, leave at default, (optimal for typical small flows). large default buffer waste memory and can hurt performance.
+echo "[b]2 default receive buffer allocated for each TCP socket. This value overrides the net.core.rmem_default value used by other protocols." | printText inf
 echo "[b]3 maximum receive buffer that can be allocated for a TCP socket" | printText inf
 TCP_RMEM=($(cat /proc/sys/net/ipv4/tcp_rmem))
-echo "/proc/sys/net/ipv4/tcp_rmem [b] [b] [b]" | printText pro
+# auto recieve buffer size and tcp window size
+TCP_RMEM_AUTO=$(cat /proc/sys/net/ipv4/tcp_moderate_rcvbuf 2>/dev/null)
+if [[ -f "/proc/sys/net/ipv4/tcp_moderate_rcvbuf" && "$TCP_RMEM_AUTO" == "1" ]]; then
+	echo -e "/proc/sys/net/ipv4/tcp_rmem [b] \e[1;32m[b (auto)]\e[0m [b]" | printText pro
+else
+	echo "/proc/sys/net/ipv4/tcp_rmem [b] [b] [b]" | printText pro
+fi
 cat /proc/sys/net/ipv4/tcp_rmem | printText val
+if [ ! -f "/proc/sys/net/ipv4/tcp_moderate_rcvbuf" ]; then
+	echo "Time to upgrade your kernel..."
+elif [ "$TCP_RMEM_AUTO" == "0" ]; then
+	echo "Set to auto..."
+	echo "/proc/sys/net/ipv4/tcp_moderate_rcvbuf" | printText pro
+	cat /proc/sys/net/ipv4/tcp_moderate_rcvbuf | printText err
+fi
 echo
 
 # Every TCP socket has this much buffer space to use before the buffer is filled up
@@ -215,6 +308,8 @@ echo
 
 calc_max_tcp_no_pressure_bytes=$(echo "${TCP_MEM[1]}*$PAGE_SIZE" | bc)
 calc_max_tcp_con_no_pressure=$(echo "scale=0; $calc_max_tcp_no_pressure_bytes/${TCP_RMEM[1]}" | bc)
+calc_max_tcp_bytes=$(echo "${TCP_MEM[2]}*$PAGE_SIZE" | bc)
+calc_max_tcp_con=$(echo "scale=0; $calc_max_tcp_bytes/${TCP_RMEM[0]}" | bc)
 speed_guess=$(echo "scale=2; ((${TCP_RMEM[1]}-(${TCP_RMEM[1]}/2^$tcp_adv_win_scale))/0.150)/1000000" | bc)
 speed_guess_mbps=$(echo "scale=2; $speed_guess*8" | bc)
 slow_speed_guess=$(echo "scale=2; ((${TCP_RMEM[0]}-(${TCP_RMEM[0]}/2^$tcp_adv_win_scale))/0.150)/1000000" | bc)
@@ -223,14 +318,12 @@ ram_at_optimum_usage=$(echo "scale=2; $calc_max_tcp_no_pressure_bytes/1000000" |
 max_networking_ram=$(echo "scale=2; (${TCP_MEM[2]}*$PAGE_SIZE)/1000000" | bc)
 
 echo "Max connections $calc_max_tcp_con_no_pressure with optimum throughput of $speed_guess Mbytes/s ($speed_guess_mbps Mbps)" | printText atn
-echo "Pressure connections will be $slow_speed_guess Mbytes/s ($slow_speed_guess_mbps Mbps)" | printText atn
+echo "Pressure connections (Max: $calc_max_tcp_con) will be $slow_speed_guess Mbytes/s ($slow_speed_guess_mbps Mbps)" | printText atn
 echo "RAM used by networking at optimum: $ram_at_optimum_usage MB" | printText atn
 echo "Max RAM used by networking: $max_networking_ram MB" | printText atn
 echo
 
 # Que disciplines have their own buffers ontop of OS buffer
-
-# Packet size, standard, jumbo, super sized
 
 # Capacity of CPU to keep up with the flux (load, jiffies)
 
@@ -277,9 +370,8 @@ if [ -f "/proc/sys/net/core/default_qdisc" ]; then
 	if [ "$(cat /proc/sys/net/core/default_qdisc)" != "fq_codel" ]; then
 		read -p "Would you like to set your default queue disciple to fq_codel? (y/n) [n] "
 		if [ "$REPLY" == "y" ]; then
-			sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
-			echo "net.core.default_qdisc = fq_codel" >> /etc/sysctl.conf
-			sysctl -p
+			sed -i "s/^\(net.core.default_qdisc =.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+			sysctl -w net.core.default_qdisc=fq_codel >> /etc/sysctl.conf
 		fi
 	fi
 else
@@ -307,6 +399,7 @@ if [ -d "/sys/class/net/$NIC/phy80211" ]; then
 		read -p "Set queue discipline to mq for $NIC? (y/n) [n] "
 		if [ "$REPLY" == "y" ]; then
 			#tc qdisc replace dev $NIC root mq
+			# some firewalls block ecn, if the data is not to hit the net, remove noecn
 			tc qdisc replace dev $NIC handle 1 root mq
 			tc qdisc replace dev $NIC parent 1:1 fq_codel noecn
 			tc qdisc replace dev $NIC parent 1:2 fq_codel
@@ -327,37 +420,92 @@ else
 		fi
 	else
 		# Older kernel optimisation
+		kernelCheck "2.4.26"
+		if [ "$?" == "0" ]; then
+		#If you are going to use HTB, edit linux/include/net/pkt_sched.h, changing PSCHED_JIFFIES to PSCHED_CPU.
+		#If you want ultimate precision, edit linux/net/sched/sch_htb.c, changing HYSTERESIS from 1 to 0.  
+		#Otherwise, HTB will dequeue packets in pairs (to improve response).
+		#There is a serious bug in HTB before version 3.17, so use a kernel version 2.4.26 or newer.		
 		echo "Preffered queue discipline is the Hierarchy Token Bucket" | printText inf
 		echo "Upgrade kernel for better queueing" | printText inf
-		echo "todo..." | printText val
+		# Set to
+		if [ "$curqdisc" != "htb" ]; then
+			# HTB will route all unclassified traffic (via a default que)
+			echo "todo..." | printText val
+			tc qdisc replace dev $NIC root htb
+			if [ 1 == 2 ]; then # HTB CLASSFUL
+			# Layer 1 - root
+			tc qdisc add dev $NIC root handle 1:0 htb
+			# Layer 2 - full bucket
+			tc class add dev $NIC parent 1:0 classid 1:1 htb rate 2048kbit
+			# Layer 3 - rate limited buckets
+			tc class add dev $NIC parent 1:1 classid 1:2 htb rate 1248kbit ceil 2048kbit	# burst fast channel
+			tc class add dev $NIC parent 1:1 classid 1:3 htb rate 400kbit ceil 400kbit		# burst slow channel
+			tc class add dev $NIC parent 1:1 classid 1:4 htb rate 400kbit ceil 400kbit		# restricted channel
+			# Layer 4 - extra splitting...
+			# ...
+			fi
+		fi
+		else
+			# Really old kernel support
+			echo "hmm..."
+		fi
 	fi
 fi
 # /sys/class/net
 echo
 
 # Default que length for dev
-# For the txqueuelen, this is mostly relevant for gigE, but should not hurt
-# anything else. Old kernels have shipped with a default txqueuelen of 100,
+# for : pfifo_fast, sch_fifo, sch_gred, sch_htb, sch_plug, sch_sfb, sch_teql
+# (HTB and a few others don't use this queue)
+# For the txqueuelen, this is mostly relevant for gigE. Old kernels have shipped with a default txqueuelen of 100,
 # which is definately too low and hurts performance.
+# a larger que means less packets gets dropped under congestion. as soon as congestion is found tcp slows down transfer.
+# if the tcp_congestion_control can't detect congestion the resulting retransmission happens too late resulting in large latencies.
+# on older kernels use 1000 or less (600 htcp or 400 cubic)
+# in newer kernels use 1000 ir more (cubic network permiting)
+# always keep the txqueuelen relative to the transfer speed (a queue cannot drain until packets have been transmitted)
+# the goal of the buffer is to allow space to accept a very small amount of "extra" packets that would otherwise trigger congestion flags (when there is little or no congestion). If you have congestion, you should test reducing the value of the queue.
+# Kleinrock : bandwidth * the delay * sqrt(Nflows) = an upper bound
 echo "Queue Length for $NIC" | printText inf
 ip link list dev $NIC | head -1 | grep -o "qlen [0-9]*" | printText val
+customsaved=$(cat /etc/rc.local | grep "^ip link set dev $NIC txqueuelen")
 curquelen=$(ip link list dev $NIC | head -1 | grep -o "qlen [0-9]*" | sed 's/.* //')
-if [[ -z "$curquelen" || "$curquelen" -lt "1001" ]]; then
-	if [[ -z "$curquelen" || "$curquelen" -lt "1000" ]]; then
-		echo "Queue length is too small"
-	else
-		echo "Queue length could be optimised"
-	fi
+if [[ -z "$customsaved" ]]; then
+	echo "Queue length could be optimised"
 	echo "Set queue len to: "
-	echo "1. 1000 (Minimum Reccomeneded)"
-	echo "2. 2000 (a larger queue)"
+	echo "1. 500 (Smaller)"
+	echo "2. 1000 (Default)"
+	echo "3. 2000 (Larger queue, WARNING: setting the queue too high can oversaturate your nic buffers)"
 	echo "s. skip (no change)"
-	read -p "Select option (1|2|s) [s] "
+	read -p "Select option (1|2|s) [s] or type custom int value: "
 	if [ "$REPLY" == "1" ]; then
-		ip link set dev $NIC txqueuelen 1000
+		ip link set dev $NIC txqueuelen 500
+		sed -i "s/^\(ip link set dev $NIC txqueuelen .*\)/#$(date +"%Y%m%d")#\1/" /etc/rc.local
+		echo "ip link set dev $NIC txqueuelen 500" >> /etc/rc.local
+		sed -i '/^exit 0/d' /etc/rc.local
+		echo "exit 0" >> /etc/rc.local
 		ip link list dev $NIC | head -1 | grep -o "qlen [0-9]*" | printText val
 	elif [ "$REPLY" == "2" ]; then
+		ip link set dev $NIC txqueuelen 1000
+		sed -i "s/^\(ip link set dev $NIC txqueuelen .*\)/#$(date +"%Y%m%d")#\1/" /etc/rc.local
+		echo "ip link set dev $NIC txqueuelen 1000" >> /etc/rc.local
+		sed -i '/^exit 0/d' /etc/rc.local
+		echo "exit 0" >> /etc/rc.local
+		ip link list dev $NIC | head -1 | grep -o "qlen [0-9]*" | printText val
+	elif [ "$REPLY" == "3" ]; then
 		ip link set dev $NIC txqueuelen 2000
+		sed -i "s/^\(ip link set dev $NIC txqueuelen .*\)/#$(date +"%Y%m%d")#\1/" /etc/rc.local
+		echo "ip link set dev $NIC txqueuelen 2000" >> /etc/rc.local
+		sed -i '/^exit 0/d' /etc/rc.local
+		echo "exit 0" >> /etc/rc.local
+		ip link list dev $NIC | head -1 | grep -o "qlen [0-9]*" | printText val
+	elif [[ -n "$REPLY" && "$REPLY" -gt "3" ]]; then
+		ip link set dev $NIC txqueuelen $REPLY
+		sed -i "s/^\(ip link set dev $NIC txqueuelen .*\)/#$(date +"%Y%m%d")#\1/" /etc/rc.local
+		echo "ip link set dev $NIC txqueuelen $REPLY" >> /etc/rc.local
+		sed -i '/^exit 0/d' /etc/rc.local
+		echo "exit 0" >> /etc/rc.local
 		ip link list dev $NIC | head -1 | grep -o "qlen [0-9]*" | printText val
 	fi
 fi
@@ -381,6 +529,10 @@ echo
 
 # ways to use more bandwidth:
 # jumbo frames
+# Packet size, standard, jumbo, super sized
+# 300 packets/sec at 1500 frame size = 450KB/sec traffic generated
+# 300 packets/sec at 4000 frame size = 1200KB/sec traffic generated
+# 300 packets/sec at 9000 frame size = 2700KB/sec traffic generated
 #1500, 2304, 4000, 9000
 echo "Frame size for $NIC" | printText inf
 ip link list dev $NIC | head -1 | grep -o "mtu [0-9]*" | printText val
@@ -392,9 +544,20 @@ if [ "$CURRENT_MTU" -lt "1500" ]; then
 	fi
 fi
 if [ "$CURRENT_MTU" -lt "1501" ]; then
+	tcp_mtu_probing=$(cat /proc/sys/net/ipv4/tcp_mtu_probing)
 	kernelCheck "2.6.17"
 	if [ "$?" != "0" ]; then
 		echo "Kernel version $(uname -r) does not support jumbo frames" | printText inf
+		if [ "$tcp_mtu_probing" == "1" ]; then
+			echo "Mtu probing not required (no jumbo frames)" | printText inf
+			echo "/proc/sys/net/ipv4/tcp_mtu_probing" | printText pro
+			cat /proc/sys/net/ipv4/tcp_mtu_probing | printText val
+			read -p "Disable MTU Probing? (y/n) [n] "
+			if [ "$REPLY" == "y" ]; then
+				sed -i "s/^\(net.ipv4.tcp_mtu_probing =.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+				sysctl -w net.ipv4.tcp_mtu_probing=0 >> /etc/sysctl.conf
+			fi
+		fi
 	else
 		echo "Kernel version $(uname -r) supports jumbo frames" | printText inf
 		gigECheck "$NIC"
@@ -415,6 +578,17 @@ if [ "$CURRENT_MTU" -lt "1501" ]; then
 					ip link set dev $NIC mtu 1500
 				else
 					echo "Test Passed, with frame size: $JUMBOSIZE"
+					if [ "$tcp_mtu_probing" == "1" ]; then
+						echo "Mtu reccomended (jumbo frames)" | printText inf
+						echo "/proc/sys/net/ipv4/tcp_mtu_probing" | printText pro
+						cat /proc/sys/net/ipv4/tcp_mtu_probing | printText val
+						read -p "Enable MTU Probing? (y/n) [n] "
+						if [ "$REPLY" == "y" ]; then
+							sed -i "s/^\(net.ipv4.tcp_mtu_probing =.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+							sysctl -w net.ipv4.tcp_mtu_probing=1 >> /etc/sysctl.conf
+						fi
+					fi
+
 				fi
 			else
 				echo "Skipping test, changing frame size failed."
@@ -424,11 +598,12 @@ if [ "$CURRENT_MTU" -lt "1501" ]; then
 fi
 echo
 
-# large recieve offload (LRO over GRO)
-# generic receive offload
+# large recieve offload (LRO)
+# friends: TSO, LSO, LFO, UFO, GSO 
+# -GRO generic receive offload
 # ideal for proxies, proxy based apps, IDS, IPS, firewall, server apps recieving vast amounts of packets.
-# implemented in Linux 2.6 kernel
-kernelCheck "2.6.0"
+# implemented in Linux 2.6.18 kernel
+kernelCheck "2.6.18"
 if [ "$?" != "0" ]; then
 	echo "Kernel $(uname -r) does not support LRO" | printText inf
 else
@@ -475,7 +650,25 @@ echo
 echo "Current congestion control modules: " | printText inf
 echo "/proc/sys/net/ipv4/tcp_congestion_control" | printText pro
 cat /proc/sys/net/ipv4/tcp_congestion_control | printText val
+CONCTRL=$(cat /proc/sys/net/ipv4/tcp_congestion_control)
 echo
+
+kernelCheck "2.6.33"
+if [ "$?" != "0" -a "$CONCTRL" != "htcp" ]; then
+	#Use htcp (bugs in others)
+	read -p "Switch to htcp congestion control? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_congestion_control =.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_congestion_control=htcp >> /etc/sysctl.conf
+	fi
+elif [ "$CONCTRL" != "cubic" ]; then
+	#Use cubic
+	read -p "Switch to cubic congestion control? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_congestion_control =.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_congestion_control=cubic >> /etc/sysctl.conf
+	fi
+fi
 
 read -p "Press enter to continue..."
 }
