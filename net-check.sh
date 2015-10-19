@@ -626,7 +626,7 @@ fi
 # when enabled it won't handle connections from two different computers behind the same NAT.
 # (the two computers don't share a timestamp clock, one connection per minute)
 # this should only ever be enabled in backend systems (2nd - 3rd tier or non www facing).
-# for www facing ha or nginx, concider disabling socket lingering instead.
+# for www facing ha or nginx, consider disabling socket lingering instead.
 if [ "$(cat /proc/sys/net/ipv4/tcp_tw_recycle)" != "0" ]; then
 	echo "tcp_tw_recycle should only be used on non public facing servers" | printText inf
 	echo "/proc/sys/net/ipv4/tcp_tw_recycle" | printText pro
