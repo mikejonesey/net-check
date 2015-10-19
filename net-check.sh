@@ -32,6 +32,18 @@
 #
 
 NICS=($(ls -1 /sys/class/net/))
+# a remote host for ping, rtt calc
+REMOTE_TEST_HOST=""
+# If no remote test host is specified, check for file with value
+if [ -z "$REMOTE_TEST_HOST" ]; then
+	if [ -f "vars/REMOTE_TEST_HOST" ]; then
+		#file in .gitignore (custom value)
+		REMOTE_TEST_HOST=$(cat "vars/REMOTE_TEST_HOST")
+	else
+		#no custom value specified, use gw for testing
+		GW=$(route -n | awk '{print $2}' | tail -n +3 | grep -v ^0 | head -1)
+	fi
+fi
 
 function printText(){
 	if [ "$1" == "inf" ]; then
@@ -80,9 +92,35 @@ function kernelCheck(){
 
 function gigECheck(){
 	#todo, something better than ethtool for this, (gig wireless won't be picked up...)
-	if [ -n "$(ethtool "$1" | grep 1000base)" ]; then
-		return 0
+	if [ -n "$1" ]; then
+		if [ -n "$(ethtool "$1" 2>/dev/null | grep 1000base)" ]; then
+			return 0
+		else
+			return 1
+		fi
 	else
+		for NIC in ${NICS[@]}; do
+			if [ -n "$(ethtool "$NIC" 2>/dev/null | grep 1000base)" ]; then
+				return 0
+			fi
+		done
+		return 1
+	fi
+}
+
+function L100Check(){
+	if [ -n "$1" ]; then
+		if [ -n "$(ethtool "$1" 2>/dev/null | grep 100base)" ]; then
+			return 0
+		else
+			return 1
+		fi
+	else
+		for NIC in ${NICS[@]}; do
+			if [ -n "$(ethtool "$NIC" 2>/dev/null | grep 100base)" ]; then
+				return 0
+			fi
+		done
 		return 1
 	fi
 }
@@ -709,8 +747,26 @@ fi
 # netdev_budget
 # how many packets to take in one go, NIC>BUF.
 # ideally left at default unless box is readding alot of data.
-# if network is 100mbs 600
+# if network is 1GE 600
 # default is 300
+gigECheck
+gigE="$?"
+if [ "$gigE" == "0" ]; then
+	netdev_budget="600"
+else
+	netdev_budget="300"
+fi
+if [ "$(cat /proc/sys/net/core/netdev_budget)" != "$netdev_budget" ]; then
+	echo "How many packets should be taken in one go?" | printText inf
+	echo "/proc/sys/net/core/netdev_budget" | printText pro
+	cat /proc/sys/net/core/netdev_budget | printText val
+	read -p "Decrease netdev_budget to $netdev_budget? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.core.netdev_budget.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.core.netdev_budget=$netdev_budget >> /etc/sysctl.conf
+	fi
+	echo
+fi
   
 ##################################################
 # CALCS
@@ -731,6 +787,44 @@ echo "Pressure connections (Max: $calc_max_tcp_con) will be $slow_speed_guess Mb
 echo "RAM used by networking at optimum: $ram_at_optimum_usage MB" | printText atn
 echo "Max RAM used by networking: $max_networking_ram MB" | printText atn
 echo
+
+#MTU=$(ip link list dev eth3 | head -1 | grep -o "mtu [0-9]*" | awk '{print $2}')
+#RTT=$(echo "scale=4; "$(tc qdisc show dev eth3 | grep -o "target [0-9\.]*" | awk '{print $2}')"/1000" | bc)
+#PING_RTT=$(ping -c 5 "$REMOTE_TEST_HOST" 2>&1 | grep -o "time=[0-9\.]*" | sed 's/time=//' | awk '{tot+=$1}END{print "scale=4; ("tot"/10)/1000"}' | bc)
+#if [[ -n "$PING_RTT" && "$(echo "$RTT-$PING_RTT" | bc | grep -o "^.")" == "-" ]]; then
+#	RTT="$PING_RTT"
+#fi
+#echo "RTT:$RTT"
+#gigECheck
+#if [ "$?" == "0" ]; then
+#	#Gig eth 1000 (in bits)
+#	LINERATE=1048576000
+#else
+#	L100Check
+#	if [ "$?" == "0" ]; then
+#		#100mbs (in bits)
+#		LINERATE=104857600
+#	else
+#		#10mbs (in bits)
+#		LINERATE=10485760
+#	fi
+#fi
+
+#Throughput = TCPWindow / round-trip-delay = 65535 Bytes / .06 Sec = 1,092,250 Bytes/Sec
+#THEORETICAL_THROUGHPUT=$(echo "scale=2; $MTU/$RTT/")
+
+#(MSS/RTT)*(C/sqrt(Loss))10-08
+
+#The TCP Window (RWIN) needs to be large enough to fit the
+#BDP (bits) = total_available_bandwidth (bits/sec) x round_trip_time (sec)
+#BDP=$(echo "scale=0; ($LINERATE*$RTT)/1" | bc)
+#1024 data storage, 1000 data communication
+#BDPK=$(echo "scale=2; $LINERATE*$RTT/1000" | bc)
+#echo "Bandwidth Delay Product: $BDP bits ($BDPK Kbit)"
+
+##################################################
+# Notes
+##################################################
 
 # 10GIGE - setup 1
 #net.ipv4.tcp_timestamps=0
