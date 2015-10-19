@@ -11,19 +11,25 @@
 # Stephen Hemminger, Bufferbloat, Linuxcon 2015
 # Alessandro Selli, Traffic Control, Linuxcon 2015
 # man pages: tcp, tcpdump, netstat
-# docs: systemtap
+# docs: kernel, systemtap
+# Documentation/networking/ip-sysctl.txt (/proc/sys/net/ipv4/* Variables)
+# Documentation/networking/ixgb.txt (Linux Base Driver for 10 Gigabit Intel(R) Ethernet Network Connection)
+# Documentation/networking/cxgb.txt (Chelsio N210 10Gb Ethernet Network Controller)
+# Documentation/sysctl/net.txt (Documentation for /proc/sys/net/*)
 # http://www.acc.umu.se/~maswan/linux-netperf.txt
 # http://www.bufferbloat.net/projects/codel/wiki
 # http://www.linuxfoundation.org/collaborate/workgroups/networking/netem
 # http://luxik.cdi.cz/~devik/qos/htb/manual/theory.htm
 # https://www.frozentux.net/ipsysctl-tutorial/chunkyhtml/tcpvariables.html
-# http://web.archive.org/web/20150214142136/https://www.frozentux.net/ipsysctl-tutorial/chunkyhtml/tcpvariables.html (for images / graph)
+# http://web.archive.org/web/20150214142136/https://www.frozentux.net/ipsysctl-tutorial/chunkyhtml/tcpvariables.html (for images / graphs)
 # https://www.frozentux.net/ipsysctl-tutorial/chunkyhtml/otherresources.html
 # https://fasterdata.es.net/host-tuning/linux/
 # http://www.psc.edu/index.php/networking/641-tcp-tune
 # https://gettys.wordpress.com/2010/12/03/introducing-the-criminal-mastermind-bufferbloat/
 # http://www.psc.edu/index.php/networking/641-tcp-tune#Linux
-
+# https://tools.ietf.org/html/rfc1337
+# http://www.isi.edu/touch/pubs/infocomm99/infocomm99-web/
+#
 
 NICS=($(ls -1 /sys/class/net/))
 
@@ -92,29 +98,43 @@ function netCheck(){
 	if [ "$?" != "0" ]; then
 		echo "Please install tcpdump, or export PATH"
 	else
+		# Quick overview of packets, fails, re-trans
+		netstat -i | column -t
+		echo
+
 		bInterface=$(ifconfig | sed 's/^$/~/' | tr "\n" "_" | sed 's/~/\n/g; s/_//g' | grep "RX" | sed 's/ .*RX bytes:/ /; s/ (.*//' | sort -k2 -n | tail -1 | awk '{print $1}')
+
+		echo "Checking for services causing packet resend (10 Secs)"
 		# check for remote services causing issues / RST
 		tcpinfo=$(timeout 10 tcpdump -i$bInterface -n -v 'tcp[tcpflags] & (tcp-rst) != 0' 2>&1 | grep -v ^$)
-		if [ -n "$(echo "$tcpinfo" | grep -v " packets ")" ]; then
-			echo "Check the status of app..."
+		if [ -n "$(echo "$tcpinfo" | grep -v " packets " | grep -v "^tcpdump:")" ]; then
+			echo "$tcpinfo"
+		else
+			echo "No issues found"
 		fi
 		echo
 
+		echo "Checking if the recieve que is filling up..."
 		# check for recv queue filling up...
-		netc1=$(netstat -anpA inet 2>/dev/null | sort -k2 -n | tail -1 | expand | egrep -v "(tcp|udp)[ ]*0")
+		netc1=$(netstat -anpA inet 2>/dev/null | sort -k2 -n | tail -10 | expand | egrep -v "(tcp|udp)[ ]*0")
 		if [ -n "$netc1" ]; then
-			echo "Recv queue filling up: "
 			echo "$netc1"
-			echo
+		else
+			echo "No issues found"
 		fi
+		echo
 
+		echo "Checking if the send queue is filling up..."
 		# check for send queue filling up...
-		netc1=$(netstat -anpA inet 2>/dev/null | sort -k3 -n | tail -1 | expand | egrep -v "(tcp|udp)[ ]*0")
+		netc1=$(netstat -anpA inet 2>/dev/null | sort -k3 -n | tail -10 | expand | egrep -v "(tcp|udp)[ ]*[0-9]*[ ]*0")
 		if [ -n "$netc1" ]; then
-			echo "Send queue filling up: "
 			echo "$netc1"
-			echo
+		else
+			echo "No issues found"
 		fi
+		echo
+
+		#test for high rate of segments retransmited
 
 	fi
 
@@ -176,7 +196,10 @@ SOC_BUF_SIZE="16777216"
 # AUTO TUNING
 ##################################################
 
-# auto recieve buffer size and tcp window size
+# If set, TCP performs receive buffer auto-tuning, attempting to
+# automatically size the buffer (no greater than tcp_rmem[2]) to
+# match the size required by the path for full throughput.  Enabled by
+# default.
 TCP_RMEM_AUTO=$(cat /proc/sys/net/ipv4/tcp_moderate_rcvbuf 2>/dev/null)
 
 ##################################################
@@ -210,16 +233,26 @@ tcp_adv_win_scale=$(cat /proc/sys/net/ipv4/tcp_adv_win_scale)
 # wmem_default = default size of send buffers used by sockets (bytes)
 
 echo "Default UNIX recieve buffer size: " | printText inf
-echo "/proc/sys/net/core/rmem_default" | printText pro
+if [ "$TCP_RMEM_AUTO" == "1" ]; then
+	echo -e "/proc/sys/net/core/rmem_default \e[1;32m(auto)" | printText pro
+else
+	echo "/proc/sys/net/core/rmem_default" | printText pro
+fi
 cat /proc/sys/net/core/rmem_default | printText val
 echo
 
 echo "Default UNIX send buffer size: " | printText inf
-echo "/proc/sys/net/core/wmem_default" | printText pro
+if [ "$TCP_RMEM_AUTO" == "1" ]; then
+	echo -e "/proc/sys/net/core/wmem_default \e[1;32m(auto)" | printText pro
+else
+	echo "/proc/sys/net/core/wmem_default" | printText pro
+fi
 cat /proc/sys/net/core/wmem_default | printText val
 echo
 
+##################################################
 # Socket Buffer Size (bytes)
+##################################################
 #This sets the max OS receive buffer size for all types of connections.
 echo "Maxiumum receive buffer size for all connections: " | printText inf
 echo "/proc/sys/net/core/rmem_max" | printText pro
@@ -242,6 +275,9 @@ if [ "$(cat /proc/sys/net/core/rmem_max)" != "$SOC_BUF_SIZE" ]; then
 fi
 echo
 
+##################################################
+# Socket Recieve Size (bytes)
+##################################################
 #This sets the max OS send buffer size for all types of connections.
 echo "Maxiumum receive buffer size for all connections: " | printText inf
 echo "/proc/sys/net/core/wmem_max" | printText pro
@@ -263,6 +299,9 @@ if [ "$(cat /proc/sys/net/core/wmem_max)" != "$SOC_BUF_SIZE" ]; then
 fi
 echo
 
+##################################################
+# TCP_MEM
+##################################################
 #The tcp_mem variable defines how the TCP stack should behave when it comes to memory usage. 
 # The values must be specified in pages sizes of (4k)
 
@@ -280,20 +319,23 @@ echo
 echo "Maxiumum RAM for TCP: " | printText inf
 echo "/proc/sys/net/ipv4/tcp_mem [p] [p] [p]" | printText pro
 TCP_MEM=($(cat /proc/sys/net/ipv4/tcp_mem))
+#.. calc current load...
+#.. calc max
+#.. calc middle
+#.. display options (WITH WARNING, increase ram over prop)...
 cat /proc/sys/net/ipv4/tcp_mem | printText val
 echo
 
-# overwritten by:
-# min		4K,  lowered  to PAGE_SIZE bytes in low-memory systems (used under presure)
-# default ???
-# max (On Linux 2.4, the default is 87380*2 bytes, lowered to 87380 in low-memory systems).
+##################################################
+# TCP_RMEM
+##################################################
 echo "[b]1 minimum receive buffer for each TCP connection, this buffer is always allocated to a TCP socket, even under high pressure on the system." | printText inf
 # With autotuning, leave at default, (optimal for typical small flows). large default buffer waste memory and can hurt performance.
 echo "[b]2 default receive buffer allocated for each TCP socket. This value overrides the net.core.rmem_default value used by other protocols." | printText inf
-echo "[b]3 maximum receive buffer that can be allocated for a TCP socket" | printText inf
+echo "[b]3 maximal size of receive buffer allowed (net.core.rmem_max and setsockopt (SO_RCVBUF) overrides)" | printText inf
 TCP_RMEM=($(cat /proc/sys/net/ipv4/tcp_rmem))
 if [[ -f "/proc/sys/net/ipv4/tcp_moderate_rcvbuf" && "$TCP_RMEM_AUTO" == "1" ]]; then
-	echo -e "/proc/sys/net/ipv4/tcp_rmem [b] \e[1;32m[b (auto)]\e[0m [b]" | printText pro
+	echo -e "/proc/sys/net/ipv4/tcp_rmem [(8192)] \e[1;32m[(87380) (auto)]\e[0;32m [(87380 and 4194304)]\e[0m" | printText pro
 else
 	echo "/proc/sys/net/ipv4/tcp_rmem [b] [b] [b]" | printText pro
 fi
@@ -307,12 +349,13 @@ elif [ "$TCP_RMEM_AUTO" == "0" ]; then
 fi
 echo
 
-# Every TCP socket has this much buffer space to use before the buffer is filled up
-#20 (ms) * 100 (Mbps) = 0.02 * 100 / 8 * 1024 = 256 KB
+##################################################
+# TCP_WMEM
+##################################################
 echo "[b]1 minimum TCP send buffer space available for a single TCP socket" | printText inf
 echo "[b]2 default buffer space allowed for a single TCP socket to use." | printText inf
-echo "[b]3 the maximum TCP send buffer space." | printText inf
-echo "/proc/sys/net/ipv4/tcp_wmem [b] [b] [b]" | printText pro
+echo "[b]3 the maximum TCP send buffer space. (net.core.wmem_max and setsockopt () overrides)" | printText inf
+echo "/proc/sys/net/ipv4/tcp_wmem [(4096B)] [(16384)] [(65536 and 4194304)]" | printText pro
 cat /proc/sys/net/ipv4/tcp_wmem | printText val
 echo
 
@@ -324,6 +367,249 @@ echo "/proc/sys/net/core/netdev_max_backlog" | printText pro
 cat /proc/sys/net/core/netdev_max_backlog | printText val
 echo
 
+##################################################
+# OTHER
+##################################################
+if [ "$(cat /proc/sys/net/ipv4/tcp_timestamps)" == "1" ]; then
+	echo "Save CPU, switch off tcp timestamps" | printText inf
+	echo "/proc/sys/net/ipv4/tcp_timestamps" | printText pro
+	cat /proc/sys/net/ipv4/tcp_timestamps | printText val
+	read -p "Switch off tcp_timestamps? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_timestamps.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_timestamps=0 >> /etc/sysctl.conf
+	fi
+	echo
+fi
+
+if [ "$(cat /proc/sys/net/ipv4/tcp_sack)" == "1" ]; then
+	echo "Enable/Disable select acknowledgments (SACKS), good for fast bus -> memory interface systems." | printText inf
+	echo "/proc/sys/net/ipv4/tcp_sack" | printText pro
+	cat /proc/sys/net/ipv4/tcp_sack | printText val
+	read -p "Switch off tcp_sack? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_sack.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_sack=0 >> /etc/sysctl.conf
+	fi
+	echo
+fi
+
+# TIME-WAIT is always 60 secs, unless higher jiffies.
+# include/net/tcp.h
+# #define TCP_TIMEWAIT_LEN (60*HZ) /* how long to wait to destroy TIME-WAIT
+#                                  * state, about 60 seconds     */
+
+#10,000 new connections per second = 600,000 sockets in the TIME-WAIT state
+
+# gdb /usr/lib/debug/boot/vmlinux-$(uname -r)
+#...
+#(gdb) print sizeof(struct tcp_timewait_sock)
+#$1 = 192
+#(gdb) print sizeof(struct tcp_sock)
+#$2 = 1784
+#(gdb) print sizeof(struct inet_bind_bucket)
+#$3 = 48
+
+#tcp_rfc1337
+# Docs:
+# 	If set, the TCP stack behaves conforming to RFC1337. If unset,
+# 	we are not conforming to RFC, but prevent TCP TIME_WAIT
+# 	assassination.
+#
+# In short TIME_WAIT assasination is a good thing, as it enables the
+# re-use of the same source port imediatley after it has been gracefully closed
+#
+# as far as I can tell the only reason the default is off, is becuase
+# the implemented solution is not a complete solution.
+#
+# TIME-WAIT disrupts a clean TCP flow, uses up ports,
+# open more ports by using port ranges, additional ips...
+# ignore RST segments in the TIME-WAIT state
+# set to 1
+if [ "$(cat /proc/sys/net/ipv4/tcp_rfc1337)" == "0" ]; then
+	echo "Enable tcp_rfc1337 for re-use of ports" | printText inf
+	echo "/proc/sys/net/ipv4/tcp_rfc1337" | printText pro
+	cat /proc/sys/net/ipv4/tcp_rfc1337 | printText val
+	read -p "Enable tcp_rfc1337? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_rfc1337.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_rfc1337=1 >> /etc/sysctl.conf
+	fi
+	echo
+fi
+
+#tcp_retries1
+# unacknowledged RTO retransmissions
+# set to 3 (default), also RFC 1122 reccomends 3+
+if [ "$(cat /proc/sys/net/ipv4/tcp_retries1)" != "3" ]; then
+	echo "Set tcp_retries1 to 3" | printText inf
+	echo "/proc/sys/net/ipv4/tcp_retries1" | printText pro
+	cat /proc/sys/net/ipv4/tcp_retries1 | printText val
+	read -p "Set tcp_retries1 to 3? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_retries1.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_retries1=3 >> /etc/sysctl.conf
+	fi
+	echo
+fi
+
+#tcp_retries2
+# This value influences the timeout of an alive TCP connection,
+# when RTO retransmissions remain unacknowledged.
+# Given a value of N, a hypothetical TCP connection following
+# exponential backoff with an initial RTO of TCP_RTO_MIN would
+# retransmit N times before killing the connection at the (N+1)th RTO.
+#
+# The default value of 15 yields a hypothetical timeout of 924.6
+# seconds and is a lower bound for the effective timeout.
+# TCP will effectively time out at the first RTO which exceeds the
+# hypothetical timeout.
+#
+# RFC 1122 recommends at least 100 seconds for the timeout,
+# which corresponds to a value of at least 8.
+# option 6 for lb or apache, 8 for other
+if [ "$(cat /proc/sys/net/ipv4/tcp_retries2)" != "6" -a "$(cat /proc/sys/net/ipv4/tcp_retries2)" != "8" ]; then
+	echo "Configure tcp_retries2" | printText inf
+	echo "/proc/sys/net/ipv4/tcp_retries2" | printText pro
+	cat /proc/sys/net/ipv4/tcp_retries2 | printText val
+	echo "1. 6 (for lb or public facing ha/nginx)"
+	echo "2. 8 (for all other)"
+	echo "3. s (skip)"
+	read -p "Set tcp_retries2 (1/2/s) [s] "
+	if [ "$REPLY" == "1" ]; then
+		sed -i "s/^\(net.ipv4.tcp_retries2.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_retries2=6 >> /etc/sysctl.conf
+	elif [ "$REPLY" == "2" ]; then
+		sed -i "s/^\(net.ipv4.tcp_retries2.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_retries2=8 >> /etc/sysctl.conf
+	fi
+	echo
+fi
+
+#tcp_synack_retries
+# Number of times SYNACKs for a passive TCP connection attempt will
+# be retransmitted. Should not be higher than 255. Default value
+# is 5, which corresponds to 31seconds till the last retransmission
+# with the current initial RTO of 1second. With this the final timeout
+# for a passive TCP connection will happen after 63seconds.
+# set to 5 if not between 1 and 255
+if [ "$(cat /proc/sys/net/ipv4/tcp_synack_retries)" -lt "1" -o "$(cat /proc/sys/net/ipv4/tcp_synack_retries)" -gt "255" ]; then
+	echo "Set tcp_synack_retries to 5" | printText inf
+	echo "/proc/sys/net/ipv4/tcp_synack_retries" | printText pro
+	cat /proc/sys/net/ipv4/tcp_synack_retries | printText val
+	read -p "Set tcp_synack_retries to 5? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_synack_retries.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_synack_retries=5 >> /etc/sysctl.conf
+	fi
+	echo
+fi
+
+#tcp_syn_retries
+# set to 6 if outside of 1 and 255
+if [ "$(cat /proc/sys/net/ipv4/tcp_syn_retries)" -lt "1" -o "$(cat /proc/sys/net/ipv4/tcp_syn_retries)" -gt "255" ]; then
+	echo "Set tcp_syn_retries to 6" | printText inf
+	echo "/proc/sys/net/ipv4/tcp_syn_retries" | printText pro
+	cat /proc/sys/net/ipv4/tcp_syn_retries | printText val
+	read -p "Set tcp_syn_retries to 6? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_syn_retries.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_syn_retries=6 >> /etc/sysctl.conf
+	fi
+	echo
+fi
+
+#netdev_max_backlog
+# This value should be low, if the kernel is too slow it needs to throw away packets rather than block the nic
+# Maximum number  of  packets,  queued  on  the  INPUT  side, when the interface
+# receives packets faster than kernel can process them.
+# set to 2000 if greater (even this is 3s)
+if [ "$(cat /proc/sys/net/core/netdev_max_backlog)" -gt "2000" ]; then
+	echo "Reduce netdev_max_backlog" | printText inf
+	echo "/proc/sys/net/core/netdev_max_backlog" | printText pro
+	cat /proc/sys/net/core/netdev_max_backlog | printText val
+	read -p "Set netdev_max_backlog to 2000? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.core.netdev_max_backlog.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.core.netdev_max_backlog=2000 >> /etc/sysctl.conf
+	fi
+	echo
+fi
+
+#somaxconn
+# how many connections can be left open for pending applications...
+# defaults to 128, SOMAXCONN
+# Limit of socket listen() backlog
+# should be < apache/haproxy max client/listen queue, otherwise the system will disable SYN cookies
+# set to 128 (if smaller and ram > 1G), or warn if greater than 1024
+
+#tcp_max_syn_backlog
+# used when an application is non responsive
+# goal is to queue packets for an overloaded software application
+# mininum value of 128 (low memory machines)
+# max grows with memory (rough guess 128+(128*8Gtotal ram), but can be increased further)
+# If server suffers from overload, try increasing this number.
+# set to 256 if lower
+
+#tcp_tw_recycle
+# reuse a TIME-WAIT connection for an incoming or outgoing connection
+# difficult to detect and difficult to diagnose problems
+# set to 0 (when enabled can give some unwanted side-effects)
+# see tcp(7)
+# when enabled it won't handle connections from two different computers behind the same NAT.
+# (the two computers don't share a timestamp clock, one connection per minute)
+# this should only ever be enabled in backend systems (2nd - 3rd tier or non www facing).
+# for www facing ha or nginx, concider disabling socket lingering instead.
+
+#tcp_tw_reuse
+# reuse a TIME-WAIT connection for an outgoing connection
+# (not much use for incoming connections)
+# set to 0 (but message that it can be 1 on an lb or high load apache)
+# see RCF1323 - two four-byte timestamp fields
+# The first one is the current value of the timestamp clock of the TCP sending the option
+# The second one is the most recent timestamp received from the remote host.
+# TWRecycled counter will be increased (no reuse counter)
+
+#tcp_keepalive_time
+# default, every 2hours
+# how often a tcp keep alive message is sent out
+# 7200 > 1200 (if default, set)
+
+#tcp_fin_timeout
+# how long to leave expired tcp connections in FIN_WAIT_2
+# default 60 secs
+# While a perfectly valid "receive only" state for an 
+# un-orphaned connection, an orphaned connection in FIN_WAIT_2 state could otherwise wait
+# forever for the remote to close its end of the connection.
+# set to 20, common applications don't have recieve only tcp connections.
+
+#tcp_max_orphans
+#each orphan eats up to ~64K of unswappable memory
+# calc on ram
+# protect from dos, on internal systems this value can be lowered to around 10000
+# on www systems increase the value to match ram, to the tone of 30000 per 8G ram
+# (cleaning these consumes cpu, leaving them consumes ram).
+
+#tcp_no_metrics_save
+# set to 0, metrics are useful, only disable if tcp performance degrades over time and test.
+
+#tcp_orphan_retries
+# influences the timeout of a locally closed TCP connection, when RTO retransmissions remain unacknowledged.
+# see tcp_retries2
+# defaults to 8, If your machine is a loaded WEB server,
+# you should think about lowering this value, such sockets
+# may consume significant resources. Cf. tcp_max_orphans.
+# set to 3
+
+# netdev_budget
+# how many packets to take in one go, NIC>BUF.
+# ideally left at default unless box is readding alot of data.
+# if network is 100mbs 600
+# default is 300
+  
+##################################################
+# CALCS
+##################################################
 calc_max_tcp_no_pressure_bytes=$(echo "${TCP_MEM[1]}*$PAGE_SIZE" | bc)
 calc_max_tcp_con_no_pressure=$(echo "scale=0; $calc_max_tcp_no_pressure_bytes/${TCP_RMEM[1]}" | bc)
 calc_max_tcp_bytes=$(echo "${TCP_MEM[2]}*$PAGE_SIZE" | bc)
@@ -340,6 +626,45 @@ echo "Pressure connections (Max: $calc_max_tcp_con) will be $slow_speed_guess Mb
 echo "RAM used by networking at optimum: $ram_at_optimum_usage MB" | printText atn
 echo "Max RAM used by networking: $max_networking_ram MB" | printText atn
 echo
+
+# 10GIGE - setup 1
+#net.ipv4.tcp_timestamps=0
+#net.ipv4.tcp_sack=0
+#net.core.rmem_max=1024000
+#net.core.wmem_max=1024000
+#net.core.rmem_default=524287
+#net.core.wmem_default=524287
+#net.core.optmem_max=524287
+#net.core.netdev_max_backlog=300000
+#net.ipv4.tcp_rmem="10000000 10000000 10000000"
+#net.ipv4.tcp_wmem="10000000 10000000 10000000"
+#net.ipv4.tcp_mem="10000000 10000000 10000000"
+
+# 10GIGE - setup 2
+# turn TCP timestamp support off, default 1, reduces CPU use
+#net.ipv4.tcp_timestamps = 0
+# turn SACK support off, default on
+# on systems with a VERY fast bus -> memory interface this is the big gainer
+#net.ipv4.tcp_sack = 0
+# set min/default/max TCP read buffer, default 4096 87380 174760
+#net.ipv4.tcp_rmem = 10000000 10000000 10000000
+# set min/pressure/max TCP write buffer, default 4096 16384 131072
+#net.ipv4.tcp_wmem = 10000000 10000000 10000000
+# set min/pressure/max TCP buffer space, default 31744 32256 32768
+#net.ipv4.tcp_mem = 10000000 10000000 10000000
+### CORE settings (mostly for socket and UDP effect)
+# set maximum receive socket buffer size, default 131071
+#net.core.rmem_max = 524287
+# set maximum send socket buffer size, default 131071
+#net.core.wmem_max = 524287
+# set default receive socket buffer size, default 65535
+#net.core.rmem_default = 524287
+# set default send socket buffer size, default 65535
+#net.core.wmem_default = 524287
+# set maximum amount of option memory buffers, default 10240
+#net.core.optmem_max = 524287
+# set number of unprocessed input packets before kernel starts dropping them; default 300
+#net.core.netdev_max_backlog = 300000
 
 # Que disciplines have their own buffers ontop of OS buffer
 
@@ -412,8 +737,8 @@ ip link list dev $NIC | head -1 | grep -o "qdisc [a-z_]*" | printText val
 curqdisc=$(ip link list dev $NIC | head -1 | grep -o "qdisc [a-z_]*" | awk '{print $2}')
 # check if eth or wifi
 if [ -d "/sys/class/net/$NIC/phy80211" ]; then
-	echo "Detected nic $NIC is wifi, preffered qdisc is mq, current qdisc is $curqdisc" | printText inf
 	if [ "$curqdisc" != "mq" ]; then
+		echo "Detected nic $NIC is wifi, preffered qdisc is mq, current qdisc is $curqdisc" | printText inf
 		read -p "Set queue discipline to mq for $NIC? (y/n) [n] "
 		if [ "$REPLY" == "y" ]; then
 			#tc qdisc replace dev $NIC root mq
@@ -426,11 +751,11 @@ if [ -d "/sys/class/net/$NIC/phy80211" ]; then
 		fi
 	fi
 else
-	echo "Detected nic $NIC is ethernet" | printText inf
 	kernelCheck "3.1.0"
 	if [ "$?" == "0" ]; then
 		#todo, check for really big nextwork, (suggest sch_fq).
 		if [ "$curqdisc" != "fq_codel" ]; then
+			echo "Detected nic $NIC is ethernet" | printText inf
 			read -p "Set queue discipline to fq_codel for $NIC? (y/n) [n] "
 			if [ "$REPLY" == "y" ]; then
 				tc qdisc replace dev $NIC root fq_codel
@@ -448,20 +773,24 @@ else
 		echo "Upgrade kernel for better queueing" | printText inf
 		# Set to
 		if [ "$curqdisc" != "htb" ]; then
-			# HTB will route all unclassified traffic (via a default que)
-			echo "todo..." | printText val
-			tc qdisc replace dev $NIC root htb
-			if [ 1 == 2 ]; then # HTB CLASSFUL
-			# Layer 1 - root
-			tc qdisc add dev $NIC root handle 1:0 htb
-			# Layer 2 - full bucket
-			tc class add dev $NIC parent 1:0 classid 1:1 htb rate 2048kbit
-			# Layer 3 - rate limited buckets
-			tc class add dev $NIC parent 1:1 classid 1:2 htb rate 1248kbit ceil 2048kbit	# burst fast channel
-			tc class add dev $NIC parent 1:1 classid 1:3 htb rate 400kbit ceil 400kbit		# burst slow channel
-			tc class add dev $NIC parent 1:1 classid 1:4 htb rate 400kbit ceil 400kbit		# restricted channel
-			# Layer 4 - extra splitting...
-			# ...
+			echo "Detected nic $NIC is ethernet" | printText inf
+			read -p "Set queue discipline to htb for $NIC? (y/n) [n] "
+			if [ "$REPLY" == "y" ]; then
+				# HTB will route all unclassified traffic (via a default que)
+				echo "todo..." | printText val
+				tc qdisc replace dev $NIC root htb
+				if [ 1 == 2 ]; then # HTB CLASSFUL
+					# Layer 1 - root
+					tc qdisc add dev $NIC root handle 1:0 htb
+					# Layer 2 - full bucket
+					tc class add dev $NIC parent 1:0 classid 1:1 htb rate 2048kbit
+					# Layer 3 - rate limited buckets
+					tc class add dev $NIC parent 1:1 classid 1:2 htb rate 1248kbit ceil 2048kbit	# burst fast channel
+					tc class add dev $NIC parent 1:1 classid 1:3 htb rate 400kbit ceil 400kbit		# burst slow channel
+					tc class add dev $NIC parent 1:1 classid 1:4 htb rate 400kbit ceil 400kbit		# restricted channel
+					# Layer 4 - extra splitting...
+					# ...
+				fi
 			fi
 		fi
 		else
@@ -473,6 +802,9 @@ fi
 # /sys/class/net
 echo
 
+##################################################
+# Queue Length (qlen / txqueuelen)
+##################################################
 # Default que length for dev
 # for : pfifo_fast, sch_fifo, sch_gred, sch_htb, sch_plug, sch_sfb, sch_teql
 # (HTB and a few others don't use this queue)
@@ -545,8 +877,10 @@ echo
 
 # 300 packets / sec (1500 byte each) = 450KB/sec traffic
 
+##################################################
+# Maximum Transfer Unit (JUMBO FRAMES)
+##################################################
 # ways to use more bandwidth:
-# jumbo frames
 # Packet size, standard, jumbo, super sized
 # 300 packets/sec at 1500 frame size = 450KB/sec traffic generated
 # 300 packets/sec at 4000 frame size = 1200KB/sec traffic generated
@@ -754,7 +1088,10 @@ function netRecov(){
 # Run the script...
 ##################################################
 
-if [ "$1" == "destroy" ]; then
+if [ "$1" == "debug" ]; then
+	#Common queries for checking the network...
+	netCheck
+elif [ "$1" == "destroy" ]; then
 	#Network slow down... busy network emulation...
 	netSim
 elif [ "$1" == "recover" ]; then
@@ -762,7 +1099,6 @@ elif [ "$1" == "recover" ]; then
 	netRecov
 else
 	#Normal Script
-	#netCheck
 	sizeMatters
 	for NIC in ${NICS[@]}; do
 		if [ "$NIC" == "lo" ]; then
