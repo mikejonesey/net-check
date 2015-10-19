@@ -542,6 +542,24 @@ fi
 # Limit of socket listen() backlog
 # should be < apache/haproxy max client/listen queue, otherwise the system will disable SYN cookies
 # set to 128 (if smaller and ram > 1G), or warn if greater than 1024
+if [ "$(cat /proc/sys/net/core/somaxconn)" -lt "128" ]; then
+	echo "Increase somaxconn" | printText inf
+	echo "/proc/sys/net/core/somaxconn" | printText pro
+	cat /proc/sys/net/core/somaxconn | printText val
+	read -p "Set somaxconn to 128? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.core.somaxconn.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.core.somaxconn=128 >> /etc/sysctl.conf
+	fi
+	echo
+elif [ "$(cat /proc/sys/net/core/somaxconn)" -gt "1024" ]; then
+	echo "Posibly decrease somaxconn" | printText inf
+	echo "/proc/sys/net/core/somaxconn" | printText pro
+	cat /proc/sys/net/core/somaxconn | printText val
+	echo "Never set somaxconn > application concurrent connections"
+	echo "If set higher the system will disable SYN cookies"
+	echo
+fi
 
 #tcp_max_syn_backlog
 # used when an application is non responsive
@@ -550,6 +568,17 @@ fi
 # max grows with memory (rough guess 128+(128*8Gtotal ram), but can be increased further)
 # If server suffers from overload, try increasing this number.
 # set to 256 if lower
+if [ "$(cat /proc/sys/net/ipv4/tcp_max_syn_backlog)" -gt "2000" ]; then
+	echo "Increase tcp_max_syn_backlog" | printText inf
+	echo "/proc/sys/net/ipv4/tcp_max_syn_backlog" | printText pro
+	cat /proc/sys/net/ipv4/tcp_max_syn_backlog | printText val
+	read -p "Set tcp_max_syn_backlog to 256? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_max_syn_backlog.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_max_syn_backlog=256 >> /etc/sysctl.conf
+	fi
+	echo
+fi
 
 #tcp_tw_recycle
 # reuse a TIME-WAIT connection for an incoming or outgoing connection
@@ -560,6 +589,17 @@ fi
 # (the two computers don't share a timestamp clock, one connection per minute)
 # this should only ever be enabled in backend systems (2nd - 3rd tier or non www facing).
 # for www facing ha or nginx, concider disabling socket lingering instead.
+if [ "$(cat /proc/sys/net/ipv4/tcp_tw_recycle)" != "0" ]; then
+	echo "tcp_tw_recycle should only be used on non public facing servers" | printText inf
+	echo "/proc/sys/net/ipv4/tcp_tw_recycle" | printText pro
+	cat /proc/sys/net/ipv4/tcp_tw_recycle | printText val
+	read -p "Disable tcp_tw_recycle? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_tw_recycle.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_tw_recycle=0 >> /etc/sysctl.conf
+	fi
+	echo
+fi
 
 #tcp_tw_reuse
 # reuse a TIME-WAIT connection for an outgoing connection
@@ -574,6 +614,19 @@ fi
 # default, every 2hours
 # how often a tcp keep alive message is sent out
 # 7200 > 1200 (if default, set)
+# a lower value will help clear the overall number of connections by ensuring valid connection are kept open.
+# a higher value will in general use less cpu
+if [ "$(cat /proc/sys/net/ipv4/tcp_keepalive_time)" -gt "1200" ]; then
+	echo "Decrease tcp_keepalive_time to send more keep alive messages" | printText inf
+	echo "/proc/sys/net/ipv4/tcp_keepalive_time" | printText pro
+	cat /proc/sys/net/ipv4/tcp_keepalive_time | printText val
+	read -p "Decrease tcp_keepalive_time to 1200? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_keepalive_time.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_keepalive_time=1200 >> /etc/sysctl.conf
+	fi
+	echo
+fi
 
 #tcp_fin_timeout
 # how long to leave expired tcp connections in FIN_WAIT_2
@@ -582,6 +635,17 @@ fi
 # un-orphaned connection, an orphaned connection in FIN_WAIT_2 state could otherwise wait
 # forever for the remote to close its end of the connection.
 # set to 20, common applications don't have recieve only tcp connections.
+if [ "$(cat /proc/sys/net/ipv4/tcp_fin_timeout)" -gt "20" ]; then
+	echo "Decrease tcp_fin_timeout to kill off FIN_WAIT_2 connection faster" | printText inf
+	echo "/proc/sys/net/ipv4/tcp_fin_timeout" | printText pro
+	cat /proc/sys/net/ipv4/tcp_fin_timeout | printText val
+	read -p "Decrease tcp_fin_timeout to 20? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_fin_timeout.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_fin_timeout=20 >> /etc/sysctl.conf
+	fi
+	echo
+fi
 
 #tcp_max_orphans
 #each orphan eats up to ~64K of unswappable memory
@@ -592,6 +656,17 @@ fi
 
 #tcp_no_metrics_save
 # set to 0, metrics are useful, only disable if tcp performance degrades over time and test.
+if [ "$(cat /proc/sys/net/ipv4/tcp_no_metrics_save)" != "0" ]; then
+	echo "Disable tcp_no_metrics_save to use tcp metrics, only disable if tcp perf degrades over time." | printText inf
+	echo "/proc/sys/net/ipv4/tcp_no_metrics_save" | printText pro
+	cat /proc/sys/net/ipv4/tcp_no_metrics_save | printText val
+	read -p "Disable tcp_no_metrics_save? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_no_metrics_save.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_no_metrics_save=0 >> /etc/sysctl.conf
+	fi
+	echo
+fi
 
 #tcp_orphan_retries
 # influences the timeout of a locally closed TCP connection, when RTO retransmissions remain unacknowledged.
@@ -600,6 +675,36 @@ fi
 # you should think about lowering this value, such sockets
 # may consume significant resources. Cf. tcp_max_orphans.
 # set to 3
+# note 0 is a special case...
+# tcp_timer.c
+# 98 /* Calculate maximal number or retries on an orphaned socket. */
+# 99 static int tcp_orphan_retries(struct sock *sk, int alive)
+# 100 {
+# 101         int retries = sysctl_tcp_orphan_retries; /* May be zero. */
+# 102 
+# 103         /* We know from an ICMP that something is wrong. */
+# 104         if (sk->sk_err_soft && !alive)
+# 105                 retries = 0;
+# 106 
+# 107         /* However, if socket sent something recently, select some safe
+# 108          * number of retries. 8 corresponds to >100 seconds with minimal
+# 109          * RTO of 200msec. */
+# 110         if (retries == 0 && alive)
+# 111                 retries = 8;
+# 112         return retries;
+# 113 }
+# As a result for a totaly overloaded web/lb the optimum would be a value of 1
+if [ "$(cat /proc/sys/net/ipv4/tcp_orphan_retries)" != "3" ]; then
+	echo "Unacklowledged retransmissions have a heavy resource cost, reduce tcp_orphan_retries on loaded web servers." | printText inf
+	echo "/proc/sys/net/ipv4/tcp_orphan_retries" | printText pro
+	cat /proc/sys/net/ipv4/tcp_orphan_retries | printText val
+	read -p "Decrease tcp_orphan_retries to 3? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_orphan_retries.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_orphan_retries=3 >> /etc/sysctl.conf
+	fi
+	echo
+fi
 
 # netdev_budget
 # how many packets to take in one go, NIC>BUF.
