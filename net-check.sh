@@ -409,7 +409,10 @@ echo
 # OTHER
 ##################################################
 if [ "$(cat /proc/sys/net/ipv4/tcp_timestamps)" == "1" ]; then
-	echo "Save CPU, switch off tcp timestamps" | printText inf
+	echo "Save CPU, switch off tcp timestamps?" | printText inf
+	echo ">> If this device is connected to WAN, leave timestamps switched on." | printText inf
+	echo ">> tcp_timestamps can cause packet loss, if you see SYN, no ACK, switch off." | printText inf
+	# packet loss can occur on high speed or super slow networks (seen in AWS).
 	echo "/proc/sys/net/ipv4/tcp_timestamps" | printText pro
 	cat /proc/sys/net/ipv4/tcp_timestamps | printText val
 	read -p "Switch off tcp_timestamps? (y/n) [n] "
@@ -656,6 +659,7 @@ fi
 # a higher value will in general use less cpu
 if [ "$(cat /proc/sys/net/ipv4/tcp_keepalive_time)" -gt "1200" ]; then
 	echo "Decrease tcp_keepalive_time to send more keep alive messages" | printText inf
+	echo ">> Useful for WAN connected devices where tcp_timestamps is not working as expected." | printText inf
 	echo "/proc/sys/net/ipv4/tcp_keepalive_time" | printText pro
 	cat /proc/sys/net/ipv4/tcp_keepalive_time | printText val
 	read -p "Decrease tcp_keepalive_time to 1200? (y/n) [n] "
@@ -734,6 +738,8 @@ fi
 # As a result for a totaly overloaded web/lb the optimum would be a value of 1
 if [ "$(cat /proc/sys/net/ipv4/tcp_orphan_retries)" != "3" ]; then
 	echo "Unacklowledged retransmissions have a heavy resource cost, reduce tcp_orphan_retries on loaded web servers." | printText inf
+	echo ">> Default = 8 = >100 secs" | printText inf
+	echo ">> 0 = if alive set to 8..." | printText inf
 	echo "/proc/sys/net/ipv4/tcp_orphan_retries" | printText pro
 	cat /proc/sys/net/ipv4/tcp_orphan_retries | printText val
 	read -p "Decrease tcp_orphan_retries to 3? (y/n) [n] "
@@ -1088,12 +1094,6 @@ echo
 echo "Frame size for $NIC" | printText inf
 ip link list dev $NIC | head -1 | grep -o "mtu [0-9]*" | printText val
 CURRENT_MTU=$(ip link list dev $NIC | head -1 | grep -o "mtu [0-9]*" | awk '{print $2}')
-if [ "$CURRENT_MTU" -lt "1500" ]; then
-	read -p "Increase mtu to mininum reccomended size? (y/n) [n] "
-	if [ "$REPLY" == "y" ]; then
-		ip link set dev $NIC mtu 1500
-	fi
-fi
 if [ "$CURRENT_MTU" -lt "1501" ]; then
 	tcp_mtu_probing=$(cat /proc/sys/net/ipv4/tcp_mtu_probing)
 	kernelCheck "2.6.17"
@@ -1109,42 +1109,66 @@ if [ "$CURRENT_MTU" -lt "1501" ]; then
 				sysctl -w net.ipv4.tcp_mtu_probing=0 >> /etc/sysctl.conf
 			fi
 		fi
+		if [ "$CURRENT_MTU" -lt "1500" ]; then
+			read -p "Increase mtu to mininum reccomended size? (y/n) [n] "
+			if [ "$REPLY" == "y" ]; then
+				ip link set dev $NIC mtu 1500
+			fi
+		fi
 	else
 		echo "Kernel version $(uname -r) supports jumbo frames" | printText inf
 		gigECheck "$NIC"
 		if [ "$?" != "0" ]; then
 			echo "$NIC is not gigE, Jumbo frames not reccomended" | printText inf
 		else
-			JUMBOSIZE=4000
-			echo "setting jumbo Max Transfer Unit size of $JUMBOSIZE"
-			ip link set dev $NIC mtu $JUMBOSIZE 2>/dev/null
-			if [ "$?" == "0" ]; then
-				#test larger page
-				# 20 bytes for the internet protocol header
-				# 8 bytes for the ICMP header and timestamp
-				echo "Testing new frame size..."
-				ping -M do -c 4 -s $(($JUMBOSIZE-28)) 10.10.0.1 &>/dev/null
-				if [ "$?" != "0" ]; then
-					echo "Frame size not good, setting to 1500 (normal)."
-					ip link set dev $NIC mtu 1500
-				else
-					echo "Test Passed, with frame size: $JUMBOSIZE"
-					if [ "$tcp_mtu_probing" == "1" ]; then
-						echo "Mtu reccomended (jumbo frames)" | printText inf
-						echo "/proc/sys/net/ipv4/tcp_mtu_probing" | printText pro
-						cat /proc/sys/net/ipv4/tcp_mtu_probing | printText val
-						read -p "Enable MTU Probing? (y/n) [n] "
-						if [ "$REPLY" == "y" ]; then
-							sed -i "s/^\(net.ipv4.tcp_mtu_probing =.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
-							sysctl -w net.ipv4.tcp_mtu_probing=1 >> /etc/sysctl.conf
+			echo "Jumbo frames supported, would you like to enable? "
+			echo "Don't enable jumbo frames if this device is connected to a VPN that has an MTU of 1500..."
+			read -p "Allow Jumbo frames? (y/n) [n] " 
+			if [ "$REPLY" == "y" ]; then
+				JUMBOSIZE=9001
+				echo "setting jumbo Max Transfer Unit size of $JUMBOSIZE"
+				ip link set dev $NIC mtu $JUMBOSIZE 2>/dev/null
+				if [ "$?" == "0" ]; then
+					#test larger page
+					# 20 bytes for the internet protocol header
+					# 8 bytes for the ICMP header and timestamp
+					echo "Testing new frame size..."
+					ping -M do -c 4 -s $(($JUMBOSIZE-28)) 10.10.0.1 &>/dev/null
+					if [ "$?" != "0" ]; then
+						echo "Frame size not good, setting to 1500 (normal)."
+						ip link set dev $NIC mtu 1500
+					else
+						echo "Test Passed, with frame size: $JUMBOSIZE"
+						if [ "$tcp_mtu_probing" == "1" ]; then
+							echo "Mtu reccomended (jumbo frames)" | printText inf
+							echo "/proc/sys/net/ipv4/tcp_mtu_probing" | printText pro
+							cat /proc/sys/net/ipv4/tcp_mtu_probing | printText val
+							read -p "Enable MTU Probing? (y/n) [n] "
+							if [ "$REPLY" == "y" ]; then
+								sed -i "s/^\(net.ipv4.tcp_mtu_probing =.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+								sysctl -w net.ipv4.tcp_mtu_probing=1 >> /etc/sysctl.conf
+							fi
 						fi
 					fi
-
+				else
+					echo "Skipping test, changing frame size failed."
 				fi
 			else
-				echo "Skipping test, changing frame size failed."
+				# User does not want Jumbo Frames
+				if [ "$CURRENT_MTU" -lt "1500" ]; then
+					read -p "Increase mtu to mininum reccomended size? (y/n) [n] "
+					if [ "$REPLY" == "y" ]; then
+						ip link set dev $NIC mtu 1500
+					fi
+				fi
 			fi
 		fi
+	fi
+elif [ "$CURRENT_MTU" -gt "1500" ]; then
+	echo "You have a large Maxiumum Transfer Unit, if this device talks with a VPN that has an MTU of 1500, the MTU should be reduced to match... "
+	echo "Reduce MTU to 1500? (y/n) [n] "
+	if [ "$REPLY" == "N" ]; then
+		ip link set dev $NIC mtu 1500
 	fi
 fi
 echo
