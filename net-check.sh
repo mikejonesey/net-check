@@ -219,7 +219,7 @@ PAGE_SIZE=$(getconf PAGESIZE)
 # I would stick with 16MB or 32MB
 
 # 16MB for the norm gigE
-SOC_BUF_SIZE="16777216"
+#SOC_BUF_SIZE="16777216"
 
 # 32 MB for host with a 10G NIC
 #SOC_BUF_SIZE="33554432"
@@ -229,6 +229,21 @@ SOC_BUF_SIZE="16777216"
 
 # 128 MB for host with a 40G NIC
 #SOC_BUF_SIZE="134217728"
+
+# if one of the above is not manually uncommented, auto-detect
+MAX_NIC_SPEED=$(find /sys/class/net -maxdepth 1 -type l -name "e*" -exec cat '{}/speed' 2>/dev/null \; | sort -n | tail -1)
+BAD_UDP_PCT=$(($(netstat -su | egrep "(receive buffer errors|packets received)" | awk '{print $1}' | tac | sed 'N;s/\n/00\//')))
+if [ "$MAX_NIC_SPEED" -le "1000" ]; then
+	SOC_BUF_SIZE="16777216"
+elif [ "$MAX_NIC_SPEED" -le "10000" ]; then
+	if [ "$BAD_UDP_PCT" -lt "5" ]; then
+		SOC_BUF_SIZE="33554432"
+	else
+		SOC_BUF_SIZE="67108864"
+	fi
+elif [ "$MAX_NIC_SPEED" -le "40000" ]; then	
+	SOC_BUF_SIZE="134217728"
+fi
 
 ##################################################
 # AUTO TUNING
