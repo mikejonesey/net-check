@@ -288,19 +288,43 @@ tcp_adv_win_scale=$(cat /proc/sys/net/ipv4/tcp_adv_win_scale)
 echo "Default UNIX recieve buffer size: " | printText inf
 if [ "$TCP_RMEM_AUTO" == "1" ]; then
 	echo -e "/proc/sys/net/core/rmem_default \e[1;32m(auto)" | printText pro
+	echo "No need to tune rmem_default, the kernel is configured to size this automatically"
 else
 	echo "/proc/sys/net/core/rmem_default" | printText pro
+	echo "1. 212992 (default)"
+	echo "2. 524287 (extra, sized up for 10G)"
+	echo "a. Enable receive buffer auto-tuning (recommended)"
+	read -p "Set rmem_default to: (1/2/a) [skip]"
+	if [ "$REPLY" == "1" ]; then
+		sed -i "s/^\(net.core.rmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.core.rmem_default=212992 >> /etc/sysctl.conf
+	elif [ "$REPLY" == "2" ]; then
+		sed -i "s/^\(net.core.rmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.core.rmem_default=524287 >> /etc/sysctl.conf
+	elif [ "$REPLY" == "a" ]; then
+		sed -i "s/^\(net.core.rmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sed -i "s/^\(net.ipv4.tcp_moderate_rcvbuf.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_moderate_rcvbuf=1 >> /etc/sysctl.conf
+	fi
 fi
 cat /proc/sys/net/core/rmem_default | printText val
 echo
 
+#The default setting (in bytes) of the socket send buffer.
+# if not define in-app, with SO_SNDBUF socket(7), the default will be used.
 echo "Default UNIX send buffer size: " | printText inf
-if [ "$TCP_RMEM_AUTO" == "1" ]; then
-	echo -e "/proc/sys/net/core/wmem_default \e[1;32m(auto)" | printText pro
-else
-	echo "/proc/sys/net/core/wmem_default" | printText pro
-fi
+echo "/proc/sys/net/core/wmem_default" | printText pro
 cat /proc/sys/net/core/wmem_default | printText val
+echo "1. 212992 (default)"
+echo "2. 524287 (extra, sized up for 10G)"
+read -p "Set wmem_default to: (1/2) [skip]"
+if [ "$REPLY" == "1" ]; then
+	sed -i "s/^\(net.core.wmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+	sysctl -w net.core.wmem_default=212992 >> /etc/sysctl.conf
+elif [ "$REPLY" == "2" ]; then
+	sed -i "s/^\(net.core.wmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+	sysctl -w net.core.wmem_default=524287 >> /etc/sysctl.conf
+fi
 echo
 
 ##################################################
