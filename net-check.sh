@@ -378,6 +378,9 @@ TCP_MEM=($(cat /proc/sys/net/ipv4/tcp_mem))
 #.. display options (WITH WARNING, increase ram over prop)...
 cat /proc/sys/net/ipv4/tcp_mem | printText val
 echo
+cat /proc/sys/net/ipv4/tcp_mem | awk -v "PAGE_SIZE=$PAGE_SIZE" '{printf "%i%s%i%s%i%s", ($1*PAGE_SIZE)/1073741824, " GB Relaxed TCP Networking Usage\n", ($2*PAGE_SIZE)/1073741824, " GB Pressure TCP Network Usage \n", ($3*PAGE_SIZE)/1073741824, " GB Max Allocated TCP Memory\n"}'
+read -p "enter to continue..."
+echo
 
 ##################################################
 # TCP_RMEM
@@ -803,6 +806,27 @@ fi
 # UDP
 ##################################################
 
+#udp_mem - vector of 3 INTEGERs: min, pressure, max
+#        Number of pages allowed for queueing by all UDP sockets.
+#
+#        min: Below this number of pages UDP is not bothered about its
+#        memory appetite. When amount of memory allocated by UDP exceeds
+#        this number, UDP starts to moderate memory usage.
+#
+#        pressure: This value was introduced to follow format of tcp_mem.
+#
+#        max: Number of pages allowed for queueing by all UDP sockets.
+#
+#        Default is calculated at boot time from amount of available memory.
+
+echo "Maxiumum RAM for UDP: " | printText inf
+echo "/proc/sys/net/ipv4/udp_mem [p] [p] [p]" | printText pro
+cat /proc/sys/net/ipv4/udp_mem | printText val
+echo
+cat /proc/sys/net/ipv4/udp_mem | awk -v "PAGE_SIZE=$PAGE_SIZE" '{printf "%i%s%i%s%i%s", ($1*PAGE_SIZE)/1073741824, " GB Relaxed UDP Networking Usage\n", ($2*PAGE_SIZE)/1073741824, " GB Pressure UDP Network Usage \n", ($3*PAGE_SIZE)/1073741824, " GB Max Allocated UDP Memory\n"}'
+read -p "enter to continue..."
+echo
+
 #udp_rmem_min - INTEGER
 #        Minimal size of receive buffer used by UDP sockets in moderation.
 #        Each UDP socket is able to use the size for receiving data, even if
@@ -813,7 +837,7 @@ echo "/proc/sys/net/ipv4/udp_rmem_min" | printText pro
 cat /proc/sys/net/ipv4/udp_rmem_min | printText val
 echo "1. 4096 (Default)"
 echo "2. 16384 (Larger)"
-read -p "Set Recieve Buffer Size for UDP sockets to... ? (1/2) [1] "
+read -p "Set Recieve Buffer Size for UDP sockets to... ? (1/2) [skip] "
 if [ "$REPLY" == "1" ]; then
 	sed -i "s/^\(net.ipv4.udp_rmem_min.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
 	sysctl -w net.ipv4.udp_rmem_min=4096 >> /etc/sysctl.conf
@@ -833,7 +857,7 @@ echo "/proc/sys/net/ipv4/udp_wmem_min" | printText pro
 cat /proc/sys/net/ipv4/udp_wmem_min | printText val
 echo "1. 4096 (Default)"
 echo "2. 16384 (Larger)"
-read -p "Set Send Buffer Size for UDP sockets to... ? (1/2) [1] "
+read -p "Set Send Buffer Size for UDP sockets to... ? (1/2) [skip] "
 if [ "$REPLY" == "1" ]; then
 	sed -i "s/^\(net.ipv4.udp_wmem_min.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
 	sysctl -w net.ipv4.udp_wmem_min=4096 >> /etc/sysctl.conf
