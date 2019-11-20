@@ -328,7 +328,7 @@ fi
 echo
 
 ##################################################
-# Socket Buffer Size (bytes)
+# Socket Read Buffer Size (bytes)
 ##################################################
 #This sets the max OS receive buffer size for all types of connections.
 echo "Maxiumum receive buffer size for all connections: " | printText inf
@@ -353,7 +353,7 @@ fi
 echo
 
 ##################################################
-# Socket Recieve Size (bytes)
+# Socket Send Buffer Size (bytes)
 ##################################################
 #This sets the max OS send buffer size for all types of connections.
 echo "Maxiumum receive buffer size for all connections: " | printText inf
@@ -402,7 +402,7 @@ TCP_MEM=($(cat /proc/sys/net/ipv4/tcp_mem))
 #.. display options (WITH WARNING, increase ram over prop)...
 cat /proc/sys/net/ipv4/tcp_mem | printText val
 echo
-cat /proc/sys/net/ipv4/tcp_mem | awk -v "PAGE_SIZE=$PAGE_SIZE" '{printf "%i%s%i%s%i%s", ($1*PAGE_SIZE)/1073741824, " GB Relaxed TCP Networking Usage\n", ($2*PAGE_SIZE)/1073741824, " GB Pressure TCP Network Usage \n", ($3*PAGE_SIZE)/1073741824, " GB Max Allocated TCP Memory\n"}'
+cat /proc/sys/net/ipv4/tcp_mem | awk -v "PAGE_SIZE=$PAGE_SIZE" '{printf "%0.2f%s%0.2f%s%0.2f%s", ($1*PAGE_SIZE)/1073741824, " GB Relaxed TCP Networking Usage\n", ($2*PAGE_SIZE)/1073741824, " GB Pressure TCP Network Usage \n", ($3*PAGE_SIZE)/1073741824, " GB Max Allocated TCP Memory\n"}'
 read -p "enter to continue..."
 echo
 
@@ -847,7 +847,7 @@ echo "Maxiumum RAM for UDP: " | printText inf
 echo "/proc/sys/net/ipv4/udp_mem [p] [p] [p]" | printText pro
 cat /proc/sys/net/ipv4/udp_mem | printText val
 echo
-cat /proc/sys/net/ipv4/udp_mem | awk -v "PAGE_SIZE=$PAGE_SIZE" '{printf "%i%s%i%s%i%s", ($1*PAGE_SIZE)/1073741824, " GB Relaxed UDP Networking Usage\n", ($2*PAGE_SIZE)/1073741824, " GB Pressure UDP Network Usage \n", ($3*PAGE_SIZE)/1073741824, " GB Max Allocated UDP Memory\n"}'
+cat /proc/sys/net/ipv4/udp_mem | awk -v "PAGE_SIZE=$PAGE_SIZE" '{printf "%0.2f%s%0.2f%s%0.2f%s", ($1*PAGE_SIZE)/1073741824, " GB Relaxed UDP Networking Usage\n", ($2*PAGE_SIZE)/1073741824, " GB Pressure UDP Network Usage \n", ($3*PAGE_SIZE)/1073741824, " GB Max Allocated UDP Memory\n"}'
 read -p "enter to continue..."
 echo
 
@@ -914,16 +914,16 @@ echo
 ##################################################
 # CALCS
 ##################################################
-calc_max_tcp_no_pressure_bytes=$(echo "${TCP_MEM[1]}*$PAGE_SIZE" | bc)
-calc_max_tcp_con_no_pressure=$(echo "scale=0; $calc_max_tcp_no_pressure_bytes/${TCP_RMEM[1]}" | bc)
-calc_max_tcp_bytes=$(echo "${TCP_MEM[2]}*$PAGE_SIZE" | bc)
-calc_max_tcp_con=$(echo "scale=0; $calc_max_tcp_bytes/${TCP_RMEM[0]}" | bc)
-speed_guess=$(echo "scale=2; ((${TCP_RMEM[1]}-(${TCP_RMEM[1]}/2^$tcp_adv_win_scale))/0.150)/1000000" | bc)
-speed_guess_mbps=$(echo "scale=2; $speed_guess*8" | bc)
-slow_speed_guess=$(echo "scale=2; ((${TCP_RMEM[0]}-(${TCP_RMEM[0]}/2^$tcp_adv_win_scale))/0.150)/1000000" | bc)
+calc_max_tcp_no_pressure_bytes=$(echo "${TCP_MEM[1]} $PAGE_SIZE" | awk '{printf "%0.2f", $1*$2}')
+calc_max_tcp_con_no_pressure=$(echo "$calc_max_tcp_no_pressure_bytes ${TCP_RMEM[1]}" | awk '{printf "%0.2f", $1/$2}')
+calc_max_tcp_bytes=$(echo "${TCP_MEM[2]} $PAGE_SIZE" | awk '{printf "%0.2f", $1*$2}')
+calc_max_tcp_con=$(echo "$calc_max_tcp_bytes ${TCP_RMEM[0]}" | awk '{printf "%0.2f", $1/$2}')
+speed_guess=$(echo "${TCP_RMEM[1]} $tcp_adv_win_scale" | awk '{printf "%0.2f", (($1-($1/2^$2))/0.150)/1048576}')
+speed_guess_mbps=$(echo "$speed_guess" | awk '{printf "%0.2f", $1*8}')
+slow_speed_guess=$(echo "scale=2; ((${TCP_RMEM[0]}-(${TCP_RMEM[0]}/2^$tcp_adv_win_scale))/0.150)/1048576" | bc)
 slow_speed_guess_mbps=$(echo "scale=2; $slow_speed_guess*8" | bc)
 ram_at_optimum_usage=$(echo "scale=2; $calc_max_tcp_no_pressure_bytes/1000000" | bc)
-max_networking_ram=$(echo "scale=2; (${TCP_MEM[2]}*$PAGE_SIZE)/1000000" | bc)
+max_networking_ram=$(echo "${TCP_MEM[2]} $PAGE_SIZE" | awk '{printf "%0.2f", ($1*$2)/1048576}')                                                                                   
 
 echo "Max connections $calc_max_tcp_con_no_pressure with optimum throughput of $speed_guess Mbytes/s ($speed_guess_mbps Mbps)" | printText atn
 echo "Pressure connections (Max: $calc_max_tcp_con) will be $slow_speed_guess Mbytes/s ($slow_speed_guess_mbps Mbps)" | printText atn
