@@ -645,16 +645,26 @@ fi
 # (the two computers don't share a timestamp clock, one connection per minute)
 # this should only ever be enabled in backend systems (2nd - 3rd tier or non www facing).
 # for www facing ha or nginx, consider disabling socket lingering instead.
-if [ "$(cat /proc/sys/net/ipv4/tcp_tw_recycle)" != "0" ]; then
-	echo "tcp_tw_recycle should only be used on non public facing servers" | printText inf
-	echo "/proc/sys/net/ipv4/tcp_tw_recycle" | printText pro
-	cat /proc/sys/net/ipv4/tcp_tw_recycle | printText val
-	read -p "Disable tcp_tw_recycle? (y/n) [n] "
-	if [ "$REPLY" == "y" ]; then
-		sed -i "s/^\(net.ipv4.tcp_tw_recycle.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
-		sysctl -w net.ipv4.tcp_tw_recycle=0 >> /etc/sysctl.conf
+
+#UPDATE
+# After the randomization of TCP timestamp offsets
+# in commit 8a5bd45f6616 (tcp: randomize tcp timestamp offsets
+# for each connection), the tcp_tw_recycle is broken for all
+# types of connections for the same reason: the timestamps
+# received from a single machine is not monotonically increasing,
+# anymore.
+if [ -f "/proc/sys/net/ipv4/tcp_tw_recycle" ]; then
+	if [ "$(cat /proc/sys/net/ipv4/tcp_tw_recycle)" != "0" ]; then
+		echo "tcp_tw_recycle should only be used on non public facing servers" | printText inf
+		echo "/proc/sys/net/ipv4/tcp_tw_recycle" | printText pro
+		cat /proc/sys/net/ipv4/tcp_tw_recycle | printText val
+		read -p "Disable tcp_tw_recycle? (y/n) [n] "
+		if [ "$REPLY" == "y" ]; then
+			sed -i "s/^\(net.ipv4.tcp_tw_recycle.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+			sysctl -w net.ipv4.tcp_tw_recycle=0 >> /etc/sysctl.conf
+		fi
+		echo
 	fi
-	echo
 fi
 
 #tcp_tw_reuse
