@@ -862,8 +862,28 @@ if [ "$REPLY" == "1" ]; then
 	sed -i "s/^\(net.ipv4.udp_wmem_min.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
 	sysctl -w net.ipv4.udp_wmem_min=4096 >> /etc/sysctl.conf
 elif [ "$REPLY" == "2" ]; then
-	sed -i "s/^\(net.ipv4.udp_wmem_min.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+	sed -i "s/^\(net.ipv4.udp_wmem_min.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.confq
 	sysctl -w net.ipv4.udp_wmem_min=16384 >> /etc/sysctl.conf
+fi
+echo
+
+##################################################
+# Optmem
+##################################################
+
+# Maximum ancillary buffer size allowed per socket. Ancillary data is a sequence
+# of struct cmsghdr structures with appended data.
+echo "/proc/sys/net/core/optmem_max" | printText pro
+cat /proc/sys/net/core/optmem_max | printText val
+echo "1. 20480 (Default)"
+echo "2. 524287 (Larger)"
+read -p "Set optmem Size to... ? (1/2) [skip] "
+if [ "$REPLY" == "1" ]; then
+	sed -i "s/^\(net.core.optmem_max.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+	sysctl -w net.core.optmem_max=10240 >> /etc/sysctl.conf
+elif [ "$REPLY" == "2" ]; then
+	sed -i "s/^\(net.core.optmem_max.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.confq
+	sysctl -w net.core.optmem_max=524287 >> /etc/sysctl.conf
 fi
 echo
   
