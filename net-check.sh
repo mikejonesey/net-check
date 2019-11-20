@@ -798,6 +798,50 @@ if [ "$(cat /proc/sys/net/core/netdev_budget)" != "$netdev_budget" ]; then
 	fi
 	echo
 fi
+
+##################################################
+# UDP
+##################################################
+
+#udp_rmem_min - INTEGER
+#        Minimal size of receive buffer used by UDP sockets in moderation.
+#        Each UDP socket is able to use the size for receiving data, even if
+#        total pages of UDP sockets exceed udp_mem pressure. The unit is byte.
+#        Default: 4K
+echo "Video Streaming?" | printText inf
+echo "/proc/sys/net/ipv4/udp_rmem_min" | printText pro
+cat /proc/sys/net/ipv4/udp_rmem_min | printText val
+echo "1. 4096 (Default)"
+echo "2. 16384 (Larger)"
+read -p "Set Recieve Buffer Size for UDP sockets to... ? (1/2) [1] "
+if [ "$REPLY" == "1" ]; then
+	sed -i "s/^\(net.ipv4.udp_rmem_min.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+	sysctl -w net.ipv4.udp_rmem_min=4096 >> /etc/sysctl.conf
+elif [ "$REPLY" == "2" ]; then
+	sed -i "s/^\(net.ipv4.udp_rmem_min.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+	sysctl -w net.ipv4.udp_rmem_min=16384 >> /etc/sysctl.conf
+fi
+echo
+
+#udp_wmem_min - INTEGER
+#        Minimal size of send buffer used by UDP sockets in moderation.
+#        Each UDP socket is able to use the size for sending data, even if
+#        total pages of UDP sockets exceed udp_mem pressure. The unit is byte.
+#        Default: 4K
+echo "Video Streaming?" | printText inf
+echo "/proc/sys/net/ipv4/udp_wmem_min" | printText pro
+cat /proc/sys/net/ipv4/udp_wmem_min | printText val
+echo "1. 4096 (Default)"
+echo "2. 16384 (Larger)"
+read -p "Set Send Buffer Size for UDP sockets to... ? (1/2) [1] "
+if [ "$REPLY" == "1" ]; then
+	sed -i "s/^\(net.ipv4.udp_wmem_min.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+	sysctl -w net.ipv4.udp_wmem_min=4096 >> /etc/sysctl.conf
+elif [ "$REPLY" == "2" ]; then
+	sed -i "s/^\(net.ipv4.udp_wmem_min.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+	sysctl -w net.ipv4.udp_wmem_min=16384 >> /etc/sysctl.conf
+fi
+echo
   
 ##################################################
 # CALCS
