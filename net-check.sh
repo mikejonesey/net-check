@@ -31,7 +31,7 @@
 # http://www.isi.edu/touch/pubs/infocomm99/infocomm99-web/
 #
 
-NICS=($(ls -1 /sys/class/net/))
+NICS=($(ls -1 /sys/class/net/ | grep ^e))
 # a remote host for ping, rtt calc
 REMOTE_TEST_HOST=""
 # If no remote test host is specified, check for file with value
