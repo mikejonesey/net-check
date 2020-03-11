@@ -190,20 +190,6 @@ title "Sizes..."
 # INTRO
 ##################################################
 
-# /proc/sys/net/core/optmem_max
-# frozentux stated tcp_mem and tcp_wmem can be finetuned but tcp_rmem should be autotuned by OS.
-# autotuning does apply to tcp_rmem, so this makes sense, but;
-# 80% of websites seem to say tcp_mem should be autotuned fine by the OS.
-# fasterdata.es.net wrote tcp_mem and optmem_max should be autotuned by OS.
-
-# "Logical" thinking:
-# the OS knows how much memory you have availible and can allocate pretty good values for tcp_mem (this could be tuned further, but should be pretty good as is).
-# the OS does not know what applications or usage you will be applying (volume vs 
-# in short;
-# (userspace vs networking), i'd expect autotuned by OS.
-# tcp (size vs quantity) i'd expect some tweeking even if the OS does pretty good guessing.
-# therefore i'd expect tcp_mem to be fine, but tcp_rmem and tcp_wmem to need a small amount of tweeeking.
-
 # tcp autotuning was introduced in linux 2.6.6 and 2.4.16 (this adjusts the tcp_rmem and default dynamically, up to the defined max).
 # eg; /proc/sys/net/ipv4/tcp_rmem [MIN] [AUTO] [MAX]; the min and max can still be tweeked, but the kernel should adjust the default automagically.
 # autotuning does not apply to rmem_default or wmem_default, these should still be set to the preffered buffer size.
@@ -254,7 +240,6 @@ fi
 # match the size required by the path for full throughput.  Enabled by
 # default.
 TCP_RMEM_AUTO=$(cat /proc/sys/net/ipv4/tcp_moderate_rcvbuf 2>/dev/null)
-TCP_AUTO_MAX=$(cat /proc/sys/net/ipv4/tcp_rmem | awk '{print $2}')
 
 ##################################################
 # tcp_adv_win_scale
@@ -286,45 +271,41 @@ tcp_adv_win_scale=$(cat /proc/sys/net/ipv4/tcp_adv_win_scale)
 # rmem_default = default size of receive buffers used by sockets (bytes)
 # wmem_default = default size of send buffers used by sockets (bytes)
 
+RMEM_DEF=$(cat /proc/sys/net/core/rmem_default)
 echo "Default UNIX recieve buffer size: " | printText inf
-if [ "$TCP_RMEM_AUTO" == "1" ]; then
-	echo -e "/proc/sys/net/core/rmem_default \e[1;32m(auto)" | printText pro
-	echo "No need to tune rmem_default, the kernel is configured to size this automatically between 212992 and $TCP_AUTO_MAX"
-else
-	echo "/proc/sys/net/core/rmem_default" | printText pro
+echo "/proc/sys/net/core/rmem_default" | printText pro
+cat /proc/sys/net/core/rmem_default | printText val
+if [ "$RMEM_DEF" -lt "524288" ]; then
 	echo "1. 212992 (default)"
-	echo "2. 524287 (extra, sized up for 10G)"
-	echo "a. Enable receive buffer auto-tuning (recommended)"
+	echo "2. 524288 (extra, sized up for 10G)"
 	read -p "Set rmem_default to: (1/2/a) [skip]"
 	if [ "$REPLY" == "1" ]; then
 		sed -i "s/^\(net.core.rmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
 		sysctl -w net.core.rmem_default=212992 >> /etc/sysctl.conf
 	elif [ "$REPLY" == "2" ]; then
 		sed -i "s/^\(net.core.rmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
-		sysctl -w net.core.rmem_default=524287 >> /etc/sysctl.conf
-	elif [ "$REPLY" == "a" ]; then
-		sed -i "s/^\(net.core.rmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
-		sed -i "s/^\(net.ipv4.tcp_moderate_rcvbuf.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
-		sysctl -w net.ipv4.tcp_moderate_rcvbuf=1 >> /etc/sysctl.conf
+		sysctl -w net.core.rmem_default=524288 >> /etc/sysctl.conf
 	fi
 fi
-cat /proc/sys/net/core/rmem_default | printText val
 echo
 
 #The default setting (in bytes) of the socket send buffer.
 # if not define in-app, with SO_SNDBUF socket(7), the default will be used.
+WMEM_DEF=$(cat /proc/sys/net/core/wmem_default)
 echo "Default UNIX send buffer size: " | printText inf
 echo "/proc/sys/net/core/wmem_default" | printText pro
 cat /proc/sys/net/core/wmem_default | printText val
-echo "1. 212992 (default)"
-echo "2. 524287 (extra, sized up for 10G)"
-read -p "Set wmem_default to: (1/2) [skip]"
-if [ "$REPLY" == "1" ]; then
-	sed -i "s/^\(net.core.wmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
-	sysctl -w net.core.wmem_default=212992 >> /etc/sysctl.conf
-elif [ "$REPLY" == "2" ]; then
-	sed -i "s/^\(net.core.wmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
-	sysctl -w net.core.wmem_default=524287 >> /etc/sysctl.conf
+if [ "$WMEM_DEF" -lt "524288" ]; then
+	echo "1. 212992 (default)"
+	echo "2. 524288 (extra, sized up for 10G)"
+	read -p "Set wmem_default to: (1/2) [skip]"
+	if [ "$REPLY" == "1" ]; then
+		sed -i "s/^\(net.core.wmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.core.wmem_default=212992 >> /etc/sysctl.conf
+	elif [ "$REPLY" == "2" ]; then
+		sed -i "s/^\(net.core.wmem_default.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.core.wmem_default=524288 >> /etc/sysctl.conf
+	fi
 fi
 echo
 
@@ -410,21 +391,69 @@ echo
 ##################################################
 # TCP_RMEM
 ##################################################
+TCP_RMAX=$(cat /proc/sys/net/core/rmem_max)
 echo "[b]1 minimum receive buffer for each TCP connection, this buffer is always allocated to a TCP socket, even under high pressure on the system." | printText inf
 # With autotuning, leave at default, (optimal for typical small flows). large default buffer waste memory and can hurt performance.
 echo "[b]2 default receive buffer allocated for each TCP socket. This value overrides the net.core.rmem_default value used by other protocols." | printText inf
 echo "[b]3 maximal size of receive buffer allowed (net.core.rmem_max and setsockopt (SO_RCVBUF) overrides)" | printText inf
 TCP_RMEM=($(cat /proc/sys/net/ipv4/tcp_rmem))
 if [[ -f "/proc/sys/net/ipv4/tcp_moderate_rcvbuf" && "$TCP_RMEM_AUTO" == "1" ]]; then
-	echo -e "/proc/sys/net/ipv4/tcp_rmem [(8192)] \e[1;32m[(87380) (auto)]\e[0;32m [(87380 and 4194304)]\e[0m" | printText pro
+	echo -e "/proc/sys/net/ipv4/tcp_rmem [(${TCP_RMEM[0]})] \e[1;32m[(${TCP_RMEM[1]}) (auto)]\e[0;32m [(${TCP_RMEM[2]}) (moderate_rcvbuf's max)]\e[0m" | printText pro
 else
-	echo "/proc/sys/net/ipv4/tcp_rmem [b] [b] [b]" | printText pro
+	echo "/proc/sys/net/ipv4/tcp_rmem [${TCP_RMEM[0]}] [${TCP_RMEM[1]}] [${TCP_RMEM[2]}]" | printText pro
 fi
 cat /proc/sys/net/ipv4/tcp_rmem | printText val
+
+echo
+echo "Under pressure..."
+echo "tcp socket buffer size: ${TCP_RMEM[0]} bytes"
+echo
+
+echo "Under normal load..."
+echo "tcp socket buffer size: ${TCP_RMEM[1]} to ${TCP_RMEM[2]} bytes but will never exceed the max: $TCP_RMAX bytes"
+echo
+
+TUNE_MIN="4096"
+
+RMEM_DEF=$(cat /proc/sys/net/core/rmem_default)
+NFS_CHECK=$(mount | grep -i nfs | grep -o "rsize=[0-9]*" | sed 's/rsize=//')
+if [ -n "$NFS_CHECK" ]; then
+	if [ "$NFS_CHECK" -le "$RMEM_DEF" -a "$NFS_CHECK" -lt "${TCP_RMEM[1]}" ]; then
+		echo "You may wish to increase your nfs read size..."
+		TUNE_DEF="${TCP_RMEM[1]}"
+	elif [ "$NFS_CHECK" -le "$RMEM_DEF" ]; then
+		# allow the same size as NFS which is not too high...
+		TUNE_DEF="$NFS_CHECK"
+	else
+		# 1048576 = 1MiB is the largest transmission size in NFS Linux
+		# Allow up to our unix default...
+		TUNE_DEF="$RMEM_DEF"
+	fi
+else
+	TUNE_DEF="${TCP_RMEM[1]}"
+fi
+
+TUNE_MAX="$(echo "$TCP_RMAX" | awk '{printf "%i", $1/2}')"
+
+if [[ "$TUNE_MIN" != "${TCP_RMEM[0]}" || "$TUNE_DEF" != "${TCP_RMEM[1]}" || "$TUNE_MAX" != "${TCP_RMEM[2]}" ]]; then
+	read -p "Swith tcp_rmem to: $TUNE_MIN $TUNE_DEF $TUNE_MAX ? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_rmem.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_rmem="$TUNE_MIN $TUNE_DEF $TUNE_MAX" >> /etc/sysctl.conf
+	fi
+fi
+
+read -p "enter to continue..."
+echo
+
+# Rmem Auto Size...
 if [ ! -f "/proc/sys/net/ipv4/tcp_moderate_rcvbuf" ]; then
-	echo "Time to upgrade your kernel..."
+	echo "Time to upgrade your kernel to get recvieve buffer auto sizing..."
 elif [ "$TCP_RMEM_AUTO" == "0" ]; then
-	echo "Set to auto..."
+	read -p "Set rmem buff to auto...? [y/n] (y) "
+	if [ "$REPLY" != "n" ]; then
+		sysctl -w net.ipv4.tcp_moderate_rcvbuf=1 >> /etc/sysctl.conf
+	fi
 	echo "/proc/sys/net/ipv4/tcp_moderate_rcvbuf" | printText pro
 	cat /proc/sys/net/ipv4/tcp_moderate_rcvbuf | printText err
 fi
@@ -901,14 +930,14 @@ echo
 echo "/proc/sys/net/core/optmem_max" | printText pro
 cat /proc/sys/net/core/optmem_max | printText val
 echo "1. 20480 (Default)"
-echo "2. 524287 (Larger)"
+echo "2. 524288 (Larger)"
 read -p "Set optmem Size to... ? (1/2) [skip] "
 if [ "$REPLY" == "1" ]; then
 	sed -i "s/^\(net.core.optmem_max.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
 	sysctl -w net.core.optmem_max=10240 >> /etc/sysctl.conf
 elif [ "$REPLY" == "2" ]; then
 	sed -i "s/^\(net.core.optmem_max.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.confq
-	sysctl -w net.core.optmem_max=524287 >> /etc/sysctl.conf
+	sysctl -w net.core.optmem_max=524288 >> /etc/sysctl.conf
 fi
 echo
   
@@ -970,14 +999,16 @@ echo
 # Notes
 ##################################################
 
+# ixgb.rst stated 524287, but we'll assume they meant 524288
+
 # 10GIGE - setup 1
 #net.ipv4.tcp_timestamps=0
 #net.ipv4.tcp_sack=0
 #net.core.rmem_max=1024000
 #net.core.wmem_max=1024000
-#net.core.rmem_default=524287
-#net.core.wmem_default=524287
-#net.core.optmem_max=524287
+#net.core.rmem_default=524288
+#net.core.wmem_default=524288
+#net.core.optmem_max=524288
 #net.core.netdev_max_backlog=300000
 #net.ipv4.tcp_rmem="10000000 10000000 10000000"
 #net.ipv4.tcp_wmem="10000000 10000000 10000000"
@@ -997,15 +1028,15 @@ echo
 #net.ipv4.tcp_mem = 10000000 10000000 10000000
 ### CORE settings (mostly for socket and UDP effect)
 # set maximum receive socket buffer size, default 131071
-#net.core.rmem_max = 524287
+#net.core.rmem_max = 524288
 # set maximum send socket buffer size, default 131071
-#net.core.wmem_max = 524287
+#net.core.wmem_max = 524288
 # set default receive socket buffer size, default 65535
-#net.core.rmem_default = 524287
+#net.core.rmem_default = 524288
 # set default send socket buffer size, default 65535
-#net.core.wmem_default = 524287
+#net.core.wmem_default = 524288
 # set maximum amount of option memory buffers, default 10240
-#net.core.optmem_max = 524287
+#net.core.optmem_max = 524288
 # set number of unprocessed input packets before kernel starts dropping them; default 300
 #net.core.netdev_max_backlog = 300000
 
