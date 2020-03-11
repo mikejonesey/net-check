@@ -254,6 +254,7 @@ fi
 # match the size required by the path for full throughput.  Enabled by
 # default.
 TCP_RMEM_AUTO=$(cat /proc/sys/net/ipv4/tcp_moderate_rcvbuf 2>/dev/null)
+TCP_AUTO_MAX=$(cat /proc/sys/net/ipv4/tcp_rmem | awk '{print $2}')
 
 ##################################################
 # tcp_adv_win_scale
@@ -288,7 +289,7 @@ tcp_adv_win_scale=$(cat /proc/sys/net/ipv4/tcp_adv_win_scale)
 echo "Default UNIX recieve buffer size: " | printText inf
 if [ "$TCP_RMEM_AUTO" == "1" ]; then
 	echo -e "/proc/sys/net/core/rmem_default \e[1;32m(auto)" | printText pro
-	echo "No need to tune rmem_default, the kernel is configured to size this automatically"
+	echo "No need to tune rmem_default, the kernel is configured to size this automatically between 212992 and $TCP_AUTO_MAX"
 else
 	echo "/proc/sys/net/core/rmem_default" | printText pro
 	echo "1. 212992 (default)"
