@@ -462,11 +462,55 @@ echo
 ##################################################
 # TCP_WMEM
 ##################################################
+TCP_WMAX=$(cat /proc/sys/net/core/wmem_max)
+TCP_WMEM=($(cat /proc/sys/net/ipv4/tcp_wmem))
 echo "[b]1 minimum TCP send buffer space available for a single TCP socket" | printText inf
 echo "[b]2 default buffer space allowed for a single TCP socket to use." | printText inf
 echo "[b]3 the maximum TCP send buffer space. (net.core.wmem_max and setsockopt () overrides)" | printText inf
 echo "/proc/sys/net/ipv4/tcp_wmem [(4096B)] [(16384)] [(65536 and 4194304)]" | printText pro
 cat /proc/sys/net/ipv4/tcp_wmem | printText val
+echo
+
+echo
+echo "Under pressure..."
+echo "tcp socket buffer size: ${TCP_WMEM[0]} bytes"
+echo
+
+echo "Under normal load..."
+echo "tcp socket buffer size: ${TCP_WMEM[1]} to ${TCP_WMEM[2]} bytes but will never exceed the max: $TCP_WMAX bytes"
+echo
+
+TUNE_MIN="4096"
+
+WMEM_DEF=$(cat /proc/sys/net/core/wmem_default)
+NFS_CHECK=$(mount | grep -i nfs | grep -o "wsize=[0-9]*" | sed 's/wsize=//')
+if [ -n "$NFS_CHECK" ]; then
+	if [ "$NFS_CHECK" -le "$WMEM_DEF" -a "$NFS_CHECK" -lt "${TCP_WMEM[1]}" ]; then
+		echo "You may wish to increase your nfs read size..."
+		TUNE_DEF="${TCP_WMEM[1]}"
+	elif [ "$NFS_CHECK" -le "$WMEM_DEF" ]; then
+		# allow the same size as NFS which is not too high...
+		TUNE_DEF="$NFS_CHECK"
+	else
+		# 1048576 = 1MiB is the largest transmission size in NFS Linux
+		# Allow up to our unix default...
+		TUNE_DEF="$WMEM_DEF"
+	fi
+else
+	TUNE_DEF="${TCP_WMEM[1]}"
+fi
+
+TUNE_MAX="$(echo "$TCP_WMAX" | awk '{printf "%i", $1/2}')"
+
+if [[ "$TUNE_MIN" != "${TCP_WMEM[0]}" || "$TUNE_DEF" != "${TCP_WMEM[1]}" || "$TUNE_MAX" != "${TCP_WMEM[2]}" ]]; then
+	read -p "Swith tcp_wmem to: $TUNE_MIN $TUNE_DEF $TUNE_MAX ? (y/n) [n] "
+	if [ "$REPLY" == "y" ]; then
+		sed -i "s/^\(net.ipv4.tcp_wmem.*\)/#$(date +"%Y%m%d")#\1/" /etc/sysctl.conf
+		sysctl -w net.ipv4.tcp_wmem="$TUNE_MIN $TUNE_DEF $TUNE_MAX" >> /etc/sysctl.conf
+	fi
+fi
+
+read -p "enter to continue..."
 echo
 
 # Maximum backlog size
